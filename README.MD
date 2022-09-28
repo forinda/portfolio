@@ -1,10 +1,8 @@
 
-<div style="display:flex;justify-content:center;align-items:center;">
 
-<img src="https://www.gravatar.com/avatar/cc8cbfcbd5bc4908182252d212020dc2" alt="My image"
+<img align="center" src="https://www.gravatar.com/avatar/cc8cbfcbd5bc4908182252d212020dc2" alt="My image"
 style="border-radius:50%;height:200px;width:200px;"
 />
-</div>
 
 <h1 style="text-align:center;">Felix orinda Portfolio</h1>
 
