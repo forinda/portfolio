@@ -30,6 +30,7 @@ useHead({
       </div>
 
       <Menu />
+      <color-mode-selector />
     </header>
     <main class="mt-10">
       <slot />
