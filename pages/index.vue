@@ -100,11 +100,11 @@ useHead({
       </div>
     </section>
     <section class="py-10 flex w-full">
-      <div class=" justify-center items-center ">
+      <div class="justify-center items-center">
         <h2 class="text-4xl font-bold mt-10 text-center uppercase underline">
           About Me
         </h2>
-        <p class="mt-4  text-center w-full">
+        <p class="mt-4 text-center w-full">
           I'm a software developer based in Nairobi, Kenya. I have a passion for
           building software that solves real-world problems. I have experience
           working with JavaScript, TypeScript, Node.js, React, Vue, Docker and

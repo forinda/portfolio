@@ -51,7 +51,7 @@ const menuItems = reactive<MenuLinkItem[]>([
       <div class="flex items-center flex-row-reverse gap-2">
         <hui-menu>
           <hui-menu-button>
-            <icon name="lucide-align-justify" class="h-8 w-8" />
+            <icon name="lucide-align-justify" class="h-6 w-6" />
           </hui-menu-button>
           <hui-menu-items
             class="absolute top-16 right-0 flex flex-col shadow-md rounded-md border border-gray-200 min-w-60"
