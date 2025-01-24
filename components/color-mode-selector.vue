@@ -1,43 +1,29 @@
 <script setup>
-
-const colorMode = useColorMode()
-const modes = [
-  'system',
-  'light',
-  'dark'
-]
-const nextModeIcons =/**@type {const} */ ({
-  system: '🌞🌜',
-  light: '🌞',
-  dark: '🌜'
-})
-
-const nextMode = computed(() => {
-  const currentIndex = modes.indexOf(colorMode.preference)
-  let nextIndex = null
-  if (currentIndex === modes.length - 1) {
-    nextIndex = 0
-  } else {
-    nextIndex = currentIndex + 1
-  }
-  return modes[nextIndex]
-
-})
-const toggleColorMode = () => {
-  colorMode.preference = nextMode.value
-}
-
-const nextModeIcon = computed(() => {
-  return nextModeIcons[nextMode.value]
-})
+const colorMode = useColorMode();
+const modes = ["system", "light", "dark"];
+const isDarkMode = ref(false);
+const isDark = computed(() => colorMode.preference === "dark");
+const colorModeIcon = computed(() => (isDark.value ? "🌜" : "🌞"));
+watch(isDarkMode, (value) => {
+  colorMode.preference = value ? "dark" : "light";
+});
 </script>
 
 <template>
   <div>
-    <button @click="toggleColorMode"
-    class="hover:bg-gray-100 dark:bg-gray-600 px-2 py-1 text-gray-500"
+    <hui-switch
+      v-model="isDarkMode"
+      aria-label="Toggle color mode"
+      :class="isDarkMode ? 'bg-gray-200' : 'bg-gray-500'"
+      class="relative inline-flex h-6 w-11 items-center rounded-full"
     >
-      {{ nextModeIcon }}
-    </button>
+      <span class="sr-only">Toggle color mode</span>
+      <span
+        :class="isDark ? 'translate-x-6' : 'translate-x-1'"
+        class="inline-flex items-center justify-center h-5 w-5 transform rounded-full dark:bg-black shadow-lg transition"
+      >
+        {{ colorModeIcon }}
+      </span>
+    </hui-switch>
   </div>
 </template>

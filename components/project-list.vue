@@ -1,8 +1,13 @@
 <script setup lang="js">
-const { data, error, status } = (await useFetch('https://api.github.com/users/forinda/repos', {}))
-const repos = computed(() => data.value.filter(repo => repo.description).sort(
-  (a, b) => b.stargazers_count - a.stargazers_count
-))
+const { data, error, status } = await useFetch(
+  "https://api.github.com/users/forinda/repos",
+  {},
+);
+const repos = computed(() =>
+  data.value
+    .filter((repo) => repo.description)
+    .sort((a, b) => b.stargazers_count - a.stargazers_count),
+);
 </script>
 <template>
   <p class="mb-10">Take a look at my projects</p>
