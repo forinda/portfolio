@@ -26,12 +26,13 @@ export function createHttpResponse<T = unknown>(
     };
 }
 
-export function createHttpErrorResponse(
-    event: EventType,
-    error: any) {
+export function createHttpErrorResponse(event: EventType, error: any) {
     if (error instanceof ApiError) {
         const { statusCode } = error;
-        return createHttpResponse(event, { status: statusCode, message: error.message });
+        return createHttpResponse(event, {
+            status: statusCode,
+            message: error.message,
+        });
     }
     // return createHttpResponse(500, null, error.message);
     return createHttpResponse(event, { status: 500, message: error.message });

@@ -20,7 +20,7 @@ export default defineEventHandler(async (event) => {
             payload.password,
             existingUser?.password!,
         );
-        const { password, ...user } = existingUser?._doc
+        const { password:_, ...user } = existingUser?._doc;
         if (!existingUser) {
             return createHttpResponse(event, {
                 status: 400,
