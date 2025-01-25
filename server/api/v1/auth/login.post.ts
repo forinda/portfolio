@@ -1,5 +1,5 @@
 import { getBaseDbClient } from "~/server/db/clients/base-client";
-import { loginUserSchema } from "~/server/validators/schema/login-user-schema";
+import { loginUserSchema } from "~/utils/validators/schema/login-user-schema";
 import {
     createHttpErrorResponse,
     createHttpResponse,
@@ -11,28 +11,30 @@ import { validateSchema } from "~/utils/validator";
 export default defineEventHandler(async (event) => {
     try {
         const { User } = await getBaseDbClient();
-        const payload = validateSchema(loginUserSchema, await readBody(event));
+        const body = await readBody(event);
+        const payload = validateSchema(loginUserSchema, body);
         const filter = payload.emailOrUsername.includes("@")
             ? { email: payload.emailOrUsername }
             : { username: payload.emailOrUsername };
-        const existingUser = await User.findOne(filter).select("+password");
-        const isPasswordValid = await comparePassword(
-            payload.password,
-            existingUser?.password!,
-        );
-        const { password:_, ...user } = existingUser?._doc;
+        const existingUser = await User.findOne({email:'test'}).select("+password");
+       
         if (!existingUser) {
             return createHttpResponse(event, {
                 status: 400,
                 message: "Invalid login credentials",
             });
         }
+        const isPasswordValid = await comparePassword(
+            payload.password,
+            existingUser?.password!,
+        );
         if (!isPasswordValid) {
             return createHttpResponse(event, {
                 status: 400,
                 message: "Invalid login credentials",
             });
         }
+        const { password: _, ...user } = existingUser?._doc;
 
         const tokens = Jwt.generateTokens({
             id: existingUser._id as string,

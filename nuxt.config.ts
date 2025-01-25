@@ -12,6 +12,7 @@ export default defineNuxtConfig({
         "@vee-validate/nuxt",
         "nuxt-headlessui",
         "@nuxt/image",
+        "nuxt-swal",
     ],
     googleFonts: {
         families: {
@@ -32,5 +33,14 @@ export default defineNuxtConfig({
     },
     experimental: {
         typedPages: true,
+    },
+    "vee-validate": {
+        autoImports: true,
+        componentNames: {
+            Form: "VeeForm",
+            Field: "VeeField",
+            FieldArray: "VeeFieldArray",
+            ErrorMessage: "VeeErrorMessage",
+        },
     },
 });

@@ -1,5 +1,5 @@
 import { getBaseDbClient } from "~/server/db/clients/base-client";
-import { createAccountSchema } from "~/server/validators/schema/create-account-schema";
+import { createAccountSchema } from "~/utils/validators/schema/create-account-schema";
 import {
     createHttpErrorResponse,
     createHttpResponse,
@@ -33,7 +33,7 @@ export default defineEventHandler(async (event) => {
 
         return createHttpResponse(event, {
             status: 201,
-            data: payload,
+            data: {},
             message: "Account created successfully",
         });
     } catch (error: any) {
