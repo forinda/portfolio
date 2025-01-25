@@ -59,6 +59,10 @@
 
 <script setup lang="ts">
 const { $swal } = useNuxtApp();
+definePageMeta({
+  layout: "default",
+  middleware: ["no-auth"],
+});
 import { toTypedSchema } from "@vee-validate/zod";
 import * as z from "zod";
 import { API_URL } from "~/utils/constants/api";
@@ -87,17 +91,18 @@ async function onSubmit(values: any) {
   if (resp.ok) {
     $swal.fire({
       title: "Success",
-      text: "Account created successfully",
+      text: "Login successful",
       icon: "success",
     });
-    router.push({ name: "task-login" });
+    await router.push({ name: "task" });
   }
 
   const data = await resp.json();
   $swal.fire({
     title: "Error",
     text: data.message || "An error occurred",
-    icon: "error",
+    icon: "warning",
+    draggable: true,
   });
 }
 </script>

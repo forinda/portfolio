@@ -1,8 +1,13 @@
 <script setup lang="ts">
 definePageMeta({
-  layout: "default",
+  layout: "task",
+  middleware: ["auth"],
 });
+const tasks = useAppTasks()
 </script>
 <template>
-  <main>Home</main>
+  <main>
+    <task-cards></task-cards>
+    <task-table></task-table>
+  </main>
 </template>

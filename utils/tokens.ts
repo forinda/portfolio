@@ -22,8 +22,13 @@ export class Jwt {
         });
     }
 
-    static verifyToken(token: string, secret: string) {
-        return jwt.verify(token, secret);
+    static verifyToken(token: string, type: "access" | "refresh") {
+        return jwt.verify(
+            token,
+            type === "access"
+                ? process.env.ACCESS_TOKEN_SECRET!
+                : process.env.REFRESH_TOKEN_SECRET!,
+        ) as JwtPayload;
     }
 
     static generateTokens(payload: Pick<JwtPayload, "claims">["claims"]) {

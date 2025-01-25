@@ -160,9 +160,9 @@ async function onSubmit(values: any) {
     $swal.fire({
       title: "Success",
       text: "Account created successfully",
-      icon: "success",
+      icon: "info",
     });
-    router.push({ name: "task-login" });
+    await router.push({ name: "task-login" });
   }
 
   const data = await resp.json();

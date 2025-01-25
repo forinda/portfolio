@@ -16,18 +16,19 @@ export default defineEventHandler(async (event) => {
         const filter = payload.emailOrUsername.includes("@")
             ? { email: payload.emailOrUsername }
             : { username: payload.emailOrUsername };
-        const existingUser = await User.findOne({email:'test'}).select("+password");
-       
+        const existingUser = await User.findOne(filter).select("+password");
+
         if (!existingUser) {
             return createHttpResponse(event, {
                 status: 400,
-                message: "Invalid login credentials",
+                message: "Account does not exist",
             });
         }
         const isPasswordValid = await comparePassword(
             payload.password,
             existingUser?.password!,
         );
+        console.log("Invalid password", { isPasswordValid });
         if (!isPasswordValid) {
             return createHttpResponse(event, {
                 status: 400,
@@ -41,7 +42,16 @@ export default defineEventHandler(async (event) => {
             email: existingUser.email,
             username: existingUser.username,
         });
-
+        setCookie(event, "access_token", tokens.accessToken, {
+            httpOnly: true,
+            sameSite: "strict",
+            secure: true,
+        });
+        setCookie(event, "refresh_token", tokens.refreshToken, {
+            httpOnly: true,
+            sameSite: "strict",
+            secure: true,
+        });
         return createHttpResponse(event, {
             status: 200,
             data: {
