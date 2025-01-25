@@ -13,9 +13,9 @@ const menuItems = reactive<MenuLinkItem[]>([
     icon: "lucide-home",
   },
   {
-    href: "#",
+    href: "/task",
     isEnabled: true,
-    label: "About",
+    label: "Tasks",
     icon: "lucide-info",
   },
   {
