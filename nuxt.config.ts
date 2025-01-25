@@ -43,4 +43,8 @@ export default defineNuxtConfig({
             ErrorMessage: "VeeErrorMessage",
         },
     },
+    content: {
+        markdown: {},
+        highlight: { theme: "dark-plus" },
+    },
 });

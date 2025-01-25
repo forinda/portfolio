@@ -17,7 +17,7 @@ export function useAppTasks() {
         });
     }
     onMounted(fetchTasks);
-    
+
     return {
         tasks,
     };

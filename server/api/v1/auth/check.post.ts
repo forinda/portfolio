@@ -46,7 +46,7 @@ export default defineEventHandler(async (event) => {
         //     }
         // }
         const ver = Jwt.verifyToken(accessToken!, "access");
-        console.log({ ver });
+        // console.log({ ver });
 
         return createHttpResponse(event, {
             status: 200,
