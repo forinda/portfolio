@@ -47,4 +47,11 @@ export default defineNuxtConfig({
         markdown: {},
         highlight: { theme: "dark-plus" },
     },
+    app: {
+        pageTransition: {
+            name: "page",
+            mode: "out-in",
+            duration: 300,
+        },
+    },
 });
