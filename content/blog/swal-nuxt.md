@@ -4,6 +4,7 @@ description: A package to simulate sweet alert plugin
 createdAt: "2025-01-25T17:23:45.548Z"
 author: Felix Orinda
 thumbnail: https://images.unsplash.com/photo-1596526131083-e8c633c948d2?q=80&w=1974&auto=format&fit=crop&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxwaG90by1wYWdlfHx8fGVufDB8fHx8fA%3D%3D
+toc: true
 ---
 
 # Nuxt Swal Plugin

@@ -4,6 +4,7 @@ description: The first article toi be written
 createdAt: "2025-01-25T17:23:45.548Z"
 author: Felix Orinda
 thumbnail: https://images.unsplash.com/photo-1499750310107-5fef28a66643?w=500&auto=format&fit=crop&q=60&ixlib=rb-4.0.3&ixid=M3wxMjA3fDB8MHxzZWFyY2h8MTV8fGNvbXB1dGVyJTIwYXJ0aWNsZXxlbnwwfHwwfHx8MA%3D%3D
+toc: true
 ---
 
 ## First content
