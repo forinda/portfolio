@@ -35,7 +35,7 @@
         </li>
         <li>
           <nuxt-link
-            to="/task/#"
+            :to="{name:'task-logout'}"
             class="block text-gray-800 hover:bg-gray-200 p-2 rounded"
           >
             Logout

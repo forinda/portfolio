@@ -59,6 +59,7 @@
 
 <script setup lang="ts">
 const { $swal } = useNuxtApp();
+// const auth = useAuth();
 definePageMeta({
   layout: "default",
   middleware: ["no-auth"],
@@ -94,14 +95,17 @@ async function onSubmit(values: any) {
       text: "Login successful",
       icon: "success",
     });
-    await router.push({ name: "task" });
+		refreshCookie('access_token');
+		refreshCookie('refresh_token');
+		// await (await auth).refresh();
+    await router.push({ name: "task", state: { from: "login" } });
   }
 
   const data = await resp.json();
   $swal.fire({
     title: "Error",
     text: data.message || "An error occurred",
-    icon: "warning",
+    icon: "error",
     draggable: true,
   });
 }

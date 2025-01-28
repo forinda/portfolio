@@ -28,7 +28,6 @@ export default defineEventHandler(async (event) => {
             payload.password,
             existingUser?.password!,
         );
-        console.log("Invalid password", { isPasswordValid });
         if (!isPasswordValid) {
             return createHttpResponse(event, {
                 status: 400,
@@ -58,7 +57,7 @@ export default defineEventHandler(async (event) => {
                 user: user,
                 ...tokens,
             },
-            message: "Account created successfully",
+            message: "Login successful",
         });
     } catch (error: any) {
         return createHttpErrorResponse(event, error);
