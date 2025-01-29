@@ -1,7 +1,7 @@
 import type { z } from "zod";
-import { ApiError } from "~/utils/api-error";
-import { HttpStatus } from "~/utils/http";
-export function validateSchema<T = any>(schema: z.Schema<T>, payload: T): T {
+import { ApiError } from "~/server/utils/api-error";
+import { HttpStatus } from "~/server/utils/http";
+export function validateSchema<T=unknown>(schema: z.Schema<T>, payload: T): T {
     const { success, error } = schema.safeParse(payload);
 
     if (!success) {

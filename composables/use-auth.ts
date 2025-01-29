@@ -1,37 +1,61 @@
-import type { CheckAuthResponseType } from "~/types";
+import type { CheckAuthResponseType, LoginResponseType } from "~/types";
 import { API_URL } from "../utils/constants/api";
+import type { LoginUserSchemaType } from "~/utils/schema/login-user-schema";
 
 export async function useAuth() {
-  const token = useCookie("access_token", {
-    sameSite: "strict",
-    secure: true,
-  });
-
-  const { data, status, error,refresh } = await useAsyncData("auth-check", async () => {
-    const resp = await $fetch<CheckAuthResponseType>(API_URL + "/auth/session", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${token.value ?? ""}`,
-      },
-      credentials: "include",
-      body: JSON.stringify({}),
-    });
-    return resp;
-  });
-  const errorDetails = computed(() => {
-    const err = error.value;
-    if (!err) return null;
-    return {
-      message: (err.toJSON() as any).data.message,
-      status: error.value?.toJSON().statusCode,
-    };
-  });
-
-  return {
-    data,
-    status,
-    error: errorDetails,
-    refresh
+  const { setUser, user } = useAuthUser();
+  type LoginOptions<Data = any, Err = Error> = {
+    onSuccess?: (data: Data) => void;
+    onError?: (error: Err) => void;
   };
+  const loginUser = async (
+    values: LoginUserSchemaType,
+    options: LoginOptions<LoginResponseType> = {},
+  ) => {
+    try {
+      const data = await $fetch<LoginResponseType>(API_URL + "/auth/login", {
+        method: "POST",
+        body: JSON.stringify(values),
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+      setUser(data.data.user);
+
+      if (options.onSuccess && typeof options.onSuccess === "function") {
+        options.onSuccess(data);
+      }
+      return;
+    } catch (error: any) {
+      console.log({ error });
+
+      if (options.onError && typeof options.onError === "function") {
+        options.onError(error.response._data);
+      }
+    }
+  };
+
+  const logout = async () => {
+    await $fetch<CheckAuthResponseType>(API_URL + "/auth/logout", {
+      method: "POST",
+    });
+    setUser(null);
+  };
+
+  const getSession = async () => {
+    if (user.value) return;
+    try {
+      const data = await $fetch<CheckAuthResponseType>(
+        API_URL + "/auth/session",
+        {
+          method: "GET",
+          headers: useRequestHeaders(["cookie"]) as HeadersInit,
+        },
+      );
+      setUser(data.data as any);
+    } catch (error: any) {
+      setUser(null);
+    }
+  };
+  return { loginUser, logout, getSession, sessionUser: user };
 }

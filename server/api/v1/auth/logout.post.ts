@@ -1,13 +1,7 @@
-import { cookieOptions } from "~/utils/cookie-options";
-import {
-  createHttpErrorResponse,
-  createHttpResponse,
-} from "~/utils/create-http-reponse";
-
 export default defineEventHandler(async (event) => {
   try {
-    deleteCookie(event, "access_token", cookieOptions);
-    deleteCookie(event, "refresh_token", cookieOptions);
+    const config = useRuntimeConfig(event);
+    deleteCookie(event, config.cookieName, config.cookieOptions as any);
     return createHttpResponse(event, {
       status: 200,
       message: "Logout successful",

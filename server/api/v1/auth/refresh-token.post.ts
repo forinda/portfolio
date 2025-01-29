@@ -1,9 +1,3 @@
-import {
-    createHttpErrorResponse,
-    createHttpResponse,
-} from "~/utils/create-http-reponse";
-import { Jwt } from "~/utils/tokens";
-
 export default defineEventHandler(async (event) => {
     try {
         const header = getHeader(event, "Authorization");

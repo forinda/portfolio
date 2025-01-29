@@ -1,3 +1,5 @@
+import type { IUserWithoutPassword } from "./schema";
+
 export type ClientHttpResponseType<T> = {
 	status: number;
 	message: string;
@@ -6,16 +8,7 @@ export type ClientHttpResponseType<T> = {
 };
 
 type LoginResponseDataType = {
-	user: {
-		_id: string;
-		email: string;
-		firstName: string;
-		lastName: string;
-		username: string;
-		createdAt: string;
-		updatedAt: string;
-		__v: 0;
-	};
+	user: IUserWithoutPassword
 	accessToken: string;
 	refreshToken: string;
 };

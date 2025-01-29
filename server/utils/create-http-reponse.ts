@@ -1,5 +1,5 @@
 import { ZodError } from "zod";
-import { ApiError } from "~/utils/api-error";
+import { ApiError } from "~/server/utils/api-error";
 
 type HttpResp<T> = {
     status: number;
