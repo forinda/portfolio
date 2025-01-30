@@ -13,6 +13,8 @@ import type { IUser } from "./entity";
 export interface ITaskDocument extends ITask, Document {
   [x: string]: any;
   _doc: any;
+  _id: string;
+  isOverdue: boolean
 }
 /**
  * @fileoverview Task schema and model types
@@ -43,7 +45,4 @@ export interface IUserDocument extends IUser, Document {
  */
 export interface IUserModel extends Model<IUserDocument> {}
 export interface IUserWithoutPassword extends Omit<IUser, "password"> {
-  opts:{
-    select: string;
-  }
 }

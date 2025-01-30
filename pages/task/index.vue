@@ -4,7 +4,7 @@ definePageMeta({
 	middleware: ["auth"],
 });
 const showCreateTask = ref(false);
-const tasks = useAppTasks();
+const {data} =await useAppTasks();
 </script>
 <template>
 	<main>
@@ -15,6 +15,7 @@ const tasks = useAppTasks();
 		/>
 		<task-cards></task-cards>
 		<task-table
+		:data="data?.data!"
 			@toggle-create-task="showCreateTask = !showCreateTask"
 		></task-table>
 		<!-- </client-only> -->

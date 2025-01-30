@@ -48,6 +48,9 @@ export default defineNuxtConfig({
       maxAge: ONE_DAY.toString(),
       rememberMeExpires: ONE_WEEK.toString(),
     },
+    public:{
+      API_URL: process.env.NUXT_API_URL ?? "http://localhost:3000/api/v1",
+    }
   },
   "vee-validate": {
     autoImports: true,

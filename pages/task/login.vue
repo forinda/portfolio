@@ -58,7 +58,7 @@
 </template>
 
 <script setup lang="ts">
-import { loginFormSchema } from "~/utils/schema/login-form-schema";
+import { loginFormSchema } from "~/lib/schema/login-form-schema";
 const { $swal } = useNuxtApp();
 const auth = useAuth();
 definePageMeta({

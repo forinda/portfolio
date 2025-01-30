@@ -1,9 +1,11 @@
 import type { CheckAuthResponseType, LoginResponseType } from "~/types";
-import { API_URL } from "../utils/constants/api";
-import type { LoginUserSchemaType } from "~/utils/schema/login-user-schema";
+import type { LoginUserSchemaType } from "~/lib/schema/login-user-schema";
 
 export async function useAuth() {
   const { setUser, user } = useAuthUser();
+  const {
+    public: { API_URL },
+  } = useRuntimeConfig();
   type LoginOptions<Data = any, Err = Error> = {
     onSuccess?: (data: Data) => void;
     onError?: (error: Err) => void;

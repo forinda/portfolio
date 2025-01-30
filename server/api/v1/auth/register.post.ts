@@ -1,4 +1,4 @@
-import { createAccountSchema } from "~/utils/schema/create-account-schema";
+import { createAccountSchema } from "~/lib/schema/create-account-schema";
 
 export default defineEventHandler(async (event) => {
   try {

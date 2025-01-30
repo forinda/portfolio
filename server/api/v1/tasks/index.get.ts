@@ -19,7 +19,7 @@ export default defineEventHandler(async (event) => {
         page,
         total,
         pages,
-        tasks,
+        docs:tasks,
       },
       message: "Tasks fetched successfully",
     });

@@ -1,5 +1,5 @@
 import { Schema, Mongoose } from "mongoose";
-import { ITaskDocument, ItaskModel } from "~/types/schema";
+import { ITaskDocument } from "~/types/schema";
 
 export const taskSchema: Schema<ITaskDocument> = new Schema(
   {
@@ -35,7 +35,7 @@ export const taskSchema: Schema<ITaskDocument> = new Schema(
       required: true,
     },
   },
-  { timestamps: true },
+  { timestamps: true, toJSON: { virtuals: true } },
 );
 
 // taskSchema.methods.
@@ -53,6 +53,9 @@ taskSchema.statics.findCompletedTasks = async function () {
 
 // taskSchema.indexes.
 // taskSchema.virtuals.
+taskSchema.virtual("isOverdue").get(function (this: ITaskDocument) {
+  return this.endDate < new Date() && this.status !== "completed";
+});
 export const getTaskModel = (connection: Mongoose) => {
   const model = connection.model<ITaskDocument>("Task", taskSchema);
 

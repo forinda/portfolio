@@ -1,7 +1,8 @@
-import { createTaskSchema } from "~/utils/schema/create-task-schema";
+import { createTaskSchema } from "~/lib/schema/create-task-schema";
 
 export default defineEventHandler(async (event) => {
-  try {
+  try {console.log('creating task');
+  
     const { user } = checkUserSession(event, "linear", {
       throwError: true,
       type: "linear",

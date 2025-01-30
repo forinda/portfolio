@@ -1,5 +1,5 @@
 import { CookieOptions } from "nuxt/app";
-import { loginUserSchema } from "~/utils/schema/login-user-schema";
+import { loginUserSchema } from "~/lib/schema/login-user-schema";
 
 export default defineEventHandler(async (event) => {
   try {
