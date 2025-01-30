@@ -8,8 +8,9 @@ type PaginationOptions = {
   limit?: number;
 };
 export async function useAppTasks(
-  options: Ref<PaginationOptions> = ref({ page: 1, limit: 10 }),
+ 
 ) {
+const pageFetchOptions = ref({ page: 1, limit: 10 });
   const {
     public: { API_URL },
   } = useRuntimeConfig();
@@ -17,7 +18,7 @@ export async function useAppTasks(
   const { data, refresh, status, error } = await useAsyncData(
     "tasks",
     async () => {
-      const { page, limit } = options.value;
+      const { page, limit } = pageFetchOptions.value;
       const url = new URL(API_URL + "/tasks");
       url.searchParams.append("page", String(page));
       url.searchParams.append("limit", String(limit));
@@ -35,7 +36,7 @@ export async function useAppTasks(
     },
   );
 
-  watch(options, () => {
+  watch(()=>pageFetchOptions, () => {
     refresh();
   });
 
@@ -60,5 +61,6 @@ export async function useAppTasks(
     status,
     error,
     createTask,
+    options: pageFetchOptions,
   };
 }
