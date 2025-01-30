@@ -42,4 +42,8 @@ export interface IUserDocument extends IUser, Document {
  * We can define static properties and methods on the model type
  */
 export interface IUserModel extends Model<IUserDocument> {}
-export interface IUserWithoutPassword extends Omit<IUser, "password"> {}
+export interface IUserWithoutPassword extends Omit<IUser, "password"> {
+  opts:{
+    select: string;
+  }
+}

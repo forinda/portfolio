@@ -4,6 +4,7 @@
     <div class="flex justify-between items-center">
       <h1 class="text-3xl font-bold text-gray-800">Tasks</h1>
       <button
+				@click="$emit('toggleCreateTask')"
         class="text-white bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg shadow-md transition"
       >
         Create Task
@@ -84,7 +85,9 @@ type Task = {
   status: string;
   dueDate: string;
 };
-
+defineEmits<{
+	toggleCreateTask: () => void;
+}>();
 const data = ref<Task[]>([
   {
     id: 1,

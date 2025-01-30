@@ -29,6 +29,26 @@ export function createHttpResponse<T = unknown>(
     };
 }
 
+export function createHttpResponseWithPagination<T = unknown>(
+    event: EventType,
+    {
+        data,
+        message = "success",
+        status,
+        access = true,
+        total,
+    }: CreateRespProps<T> & { total: number },
+): HttpResp<T> & { total: number } {
+    event.node.res.statusCode = status;
+    return {
+        status,
+        data: data as T,
+        message,
+        access,
+        total,
+    };
+}
+
 export function createHttpErrorResponse(
     event: EventType,
     error: any,
