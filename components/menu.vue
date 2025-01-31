@@ -62,11 +62,11 @@ const menuItems = reactive<MenuLinkItem[]>([
               :key="item.label"
             >
               <nuxt-link
-                :class="{
+							:class="{
                   'bg-blue-500 text-white': active,
                   'opacity-50': !item.isEnabled,
                 }"
-                class="flex items-center gap-2 p-3"
+                class="flex items-center gap-2 p-3 dark:text-gray-100"
                 :href="item.href"
                 :disabled="!item.isEnabled"
               >
@@ -99,7 +99,7 @@ const menuItems = reactive<MenuLinkItem[]>([
           }"
         >
           <nuxt-link
-            class="flex items-center gap-2 text-gray-800 hover:text-blue-500"
+            class="flex items-center gap-2 text-gray-800 hover:text-blue-500 dark:text-gray-100"
             :href="item.href"
             :disabled="!item.isEnabled"
           >
