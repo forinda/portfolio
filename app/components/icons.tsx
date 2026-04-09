@@ -1,0 +1,18 @@
+export {
+  IconBrandGithub as GitHubIcon,
+  IconBrandLinkedin as LinkedInIcon,
+  IconExternalLink as ExternalLinkIcon,
+  IconMenu2 as MenuIcon,
+  IconX as CloseIcon,
+  IconChevronDown as ArrowDownIcon,
+  IconCheck as CheckIcon,
+  IconAward as AwardIcon,
+  IconBrandTypescript as TypeScriptIcon,
+  IconTerminal2 as TerminalIcon,
+  IconCopy as CopyIcon,
+  IconArrowUp as ArrowUpIcon,
+  IconBriefcase as BriefcaseIcon,
+  IconSchool as SchoolIcon,
+  IconMapPin as MapPinIcon,
+  IconMail as MailIcon,
+} from "@tabler/icons-react";
