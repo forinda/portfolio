@@ -142,11 +142,18 @@ export const projects = [
 
 export const experience = [
   {
+    title: "Software Engineer",
+    company: "Datawise Africa",
+    period: "Dec 2025 – Present",
+    description:
+      "Engineering production platforms for an AI and data research company. Leading development of the Datawise Africa platform and the Datalab Africa collaboration system.",
+  },
+  {
     title: "Software Engineer Intern",
     company: "Datawise Africa",
-    period: "May 2025 – Present",
+    period: "May 2025 – Nov 2025",
     description:
-      "Engineering production platforms for an AI and data research company. Delivered the Datawise Africa platform and the Datalab Africa collaboration system.",
+      "Built and shipped the initial Datawise Africa platform and the Datalab Africa collaboration system.",
   },
   {
     title: "Software Engineer (Contract)",
