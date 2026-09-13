@@ -37,7 +37,7 @@
 
 html {
   scroll-behavior: smooth;
-  scroll-padding-top: 1.5rem;
+  scroll-padding-top: 5rem;
 }
 
 body {
@@ -88,7 +88,6 @@ h3 {
 .prose h2,
 .prose h3 {
   font-family: var(--font-serif);
-  scroll-margin-top: 1.5rem;
 }
 
 .prose h2 {

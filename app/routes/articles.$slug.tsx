@@ -124,7 +124,7 @@ export default function ArticlePage({ loaderData }: Route.ComponentProps) {
                 <TocList toc={toc} />
               </div>
             </details>
-            <div className="sticky top-8 hidden flex-col gap-3 lg:flex">
+            <div className="sticky top-24 hidden flex-col gap-3 lg:flex">
               <p className="text-sm font-semibold">Contents</p>
               <TocList toc={toc} />
             </div>
