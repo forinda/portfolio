@@ -48,7 +48,11 @@ They fall into three groups:
 
 The reasoning is written into the KickJS docs. Domain layers like auth, multi-tenancy, audit and observability vary from project to project: different claim shapes, different session stores, different policy rules. When a framework ships an opinionated package for one of those, two things happen. Teams with edge cases either fork it or ask for features that grow the package for everyone. And the framework's release cycle gets tied to that domain, so upgrading the framework forces you to review your auth.
 
-{/* CONFIRM: Was there a moment or a specific support burden that made you decide? Add it if you want the section to feel personal. */}
+For me the moment was concrete. I bootstrapped an application that needed third-party authentication, and with the auth package everything was already wired up: plugins for every piece, setup done, all of it working. Then I realised how much magic that was. If someone wanted to extend it in a way I hadn't planned for, they would have to come to me, the framework maintainer, and ask for the feature.
+
+That changed who I was building for. KickJS was no longer only for my own projects. Other developers would bring opinions that don't match mine, and the framework should give them room to express those opinions instead of making them sit on mine.
+
+Databases made the same point. In the Python world there are two dominant ORMs, and your framework mostly picks for you: Flask projects reach for SQLAlchemy through Flask-SQLAlchemy, and Django projects use the Django ORM with its built-in models and migrations. I had started down a similar road, building scaffolds around Prisma and Drizzle. Then Prisma 7 came out and broke most of what I had set up. I sat down and asked myself whether I would keep maintaining other projects' breaking changes inside my framework. The answer was no. I would build the layers and the ways to use them, and let people choose the tools they want, without fighting the framework to do it.
 
 ## What replaced the packages
 
