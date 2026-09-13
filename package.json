@@ -9,13 +9,20 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
+    "@mdx-js/rollup": "^3.1.1",
     "@netlify/vite-plugin-react-router": "^3.1.1",
     "@react-router/node": "7.14.0",
     "@react-router/serve": "7.14.0",
     "isbot": "^5.1.36",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
-    "react-router": "7.14.0"
+    "react-router": "7.14.0",
+    "rehype-mdx-toc": "^1.1.0",
+    "rehype-pretty-code": "^0.14.5",
+    "rehype-slug": "^6.0.0",
+    "remark-frontmatter": "^5.0.0",
+    "remark-mdx-frontmatter": "^5.2.0",
+    "shiki": "^4.4.3"
   },
   "devDependencies": {
     "@react-router/dev": "7.14.0",
