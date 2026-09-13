@@ -8,19 +8,19 @@ export const hero = {
   oneLiner:
     "I design and ship production software across fintech, healthcare, SaaS, and data/AI — and I built the framework to build them faster.",
   paragraph:
-    "I'm a software engineer based in Nairobi, Kenya, with a BSc in Computer Science from Egerton University and 3+ years shipping production systems. Most developers choose a framework. I built one — KickJS, an open-source, decorator-driven Node.js ecosystem with 19 packages and docs in 8 languages.",
+    "I'm a software engineer based in Nairobi, Kenya, with a BSc in Computer Science from Egerton University and 3+ years shipping production systems. Most developers choose a framework. I built one — KickJS, an open-source, decorator-driven Node.js framework with 17 npm packages — plus fordb, a desktop database client, and fcms, a self-hostable CMS.",
 };
 
 export const about = {
   paragraphs: [
     "I started coding during my Computer Science studies at Egerton University and quickly moved beyond coursework into real-world production systems. My curiosity wasn't satisfied by just using tools — I wanted to understand how they worked at the deepest level.",
-    "That curiosity led me to build KickJS: a full Node.js framework that started as a personal scaffolding tool and grew into a 19-package ecosystem. Building it forced me to understand middleware pipelines under load, dependency injection containers, graceful shutdowns, and every layer of a production system.",
+    "That curiosity led me to build KickJS: a full Node.js framework that started as a personal scaffolding tool and grew into a 17-package ecosystem running on Express, Fastify, or h3. Building it forced me to understand middleware pipelines under load, dependency injection containers, graceful shutdowns, and every layer of a production system.",
     "I've shipped software for real companies — from AI research platforms to data collaboration systems to urban intelligence tools. I write clean, well-documented, handoff-ready code and communicate proactively so stakeholders always know where things stand.",
   ],
   stats: [
     { value: "3+", label: "Years Experience" },
-    { value: "19", label: "NPM Packages" },
-    { value: "8", label: "Doc Languages" },
+    { value: "17", label: "NPM Packages" },
+    { value: "3", label: "Open-Source Products" },
     { value: "5+", label: "Industries Served" },
   ],
 };
@@ -68,48 +68,79 @@ export const skills = {
 
 export const kickjs = {
   summary:
-    "An open-source, decorator-driven Node.js framework built on Express 5 and TypeScript — sitting between Express's bare-metal flexibility and NestJS's heavyweight abstraction. Decorators for structure, Express under the hood, zero magic.",
+    "A production-grade, decorator-driven Node.js framework for TypeScript — NestJS ergonomics without the complexity. Runs on Express, Fastify, or h3 (swap the engine in one line), with DI, modules, generators, and end-to-end type safety powered by Zod and Vite.",
   highlights: [
     "Decorator-driven routing & DI",
-    "REST, GraphQL, WebSocket & SSE",
-    "Auto-generated OpenAPI from Zod",
-    "Built-in auth, caching, cron & mailer",
-    "Full CLI scaffolding in 2 seconds",
-    "Vite 8 HMR in ~200ms",
+    "Express, Fastify or h3 runtimes",
+    "Edge-ready: Workers, Bun & Deno",
+    "Typegen + typed fetch client",
+    "Auto OpenAPI from Zod schemas",
+    "Vite HMR in ~200ms",
   ],
   stats: [
-    { value: "19", label: "Packages" },
-    { value: "8", label: "Doc Languages" },
-    { value: "10", label: "Example Apps" },
+    { value: "17", label: "Packages" },
+    { value: "v8", label: "Core Release" },
+    { value: "4", label: "Runtimes" },
     { value: "MIT", label: "License" },
   ],
   quickStart: "npx @forinda/kickjs-cli new my-api",
-  codeSnippet: `import { bootstrap, helmet, cors } from '@forinda/kickjs'
-import { modules } from './modules'
+  codeSnippet: `@Controller()
+export class HelloController {
+  @Autowired() private readonly hello!: HelloService
 
-bootstrap({
-  modules,
-  middleware: [helmet(), cors(), express.json()],
-})`,
-  codeFilename: "index.ts",
+  @Get('/')
+  index(ctx: Ctx<KickRoutes.HelloController['index']>) {
+    return this.hello.greet('World')
+  }
+}`,
+  codeFilename: "hello.controller.ts",
   packages: [
-    { name: "@forinda/kickjs", desc: "Core framework — decorators, DI, routing" },
-    { name: "@forinda/kickjs-cli", desc: "CLI scaffolding — new projects & modules" },
-    { name: "@forinda/kickjs-auth", desc: "Authentication & authorization subsystem" },
-    { name: "@forinda/kickjs-cache", desc: "Caching layer with pluggable adapters" },
-    { name: "@forinda/kickjs-cron", desc: "Cron job scheduling & management" },
-    { name: "@forinda/kickjs-mailer", desc: "Email subsystem with template support" },
-    { name: "@forinda/kickjs-queue", desc: "Queue adapters — BullMQ, RabbitMQ, Kafka" },
-    { name: "@forinda/kickjs-openapi", desc: "Auto-generated Swagger from Zod schemas" },
-    { name: "@forinda/kickjs-telemetry", desc: "OpenTelemetry tracing integration" },
+    { name: "@forinda/kickjs", desc: "Core framework — DI, decorators, pluggable HTTP runtimes" },
+    { name: "@forinda/kickjs-cli", desc: "Scaffolding, generators & custom commands" },
+    { name: "@forinda/kickjs-vite", desc: "Vite plugin — single-port HMR & typegen watcher" },
+    { name: "@forinda/kickjs-client", desc: "Typed fetch client with end-to-end response types" },
+    { name: "@forinda/kickjs-db", desc: "Native ORM — code-first schema & reversible migrations" },
+    { name: "@forinda/kickjs-ws", desc: "WebSocket controllers on ws or Socket.IO" },
+    { name: "@forinda/kickjs-ai", desc: "AI runtime — providers, tools, streaming, RAG & agents" },
+    { name: "@forinda/kickjs-mcp", desc: "Expose controllers as Model Context Protocol tools" },
+    { name: "@forinda/kickjs-swagger", desc: "OpenAPI generation, Swagger UI & ReDoc" },
+    { name: "@forinda/kickjs-schema", desc: "Validation with Zod, Valibot, Yup, Joi or any Standard Schema" },
+    { name: "@forinda/kickjs-queue", desc: "BullMQ queues & decorator-driven workers" },
+    { name: "@forinda/kickjs-grpc", desc: "gRPC, gRPC-Web & Connect served from your app" },
+    { name: "@forinda/kickjs-testing", desc: "TestModule builder & test helpers" },
+    { name: "@forinda/kickjs-devtools", desc: "Dashboard — routes, DI container, metrics, health" },
+    { name: "@forinda/kickjs-devtools-kit", desc: "Types, RPC & sampler for DevTools integrations" },
+    { name: "@forinda/kickjs-cli-kit", desc: "Contract for CLI plugins & custom generators" },
+    { name: "@forinda/kickjs-lint", desc: "Lint rules for framework conventions" },
   ],
   links: {
-    docs: "https://forinda.github.io/kick-js",
+    docs: "https://kickjs.app",
     github: "https://github.com/forinda/kick-js",
   },
 };
 
 export const projects = [
+  {
+    name: "fordb",
+    url: "https://github.com/forinda/fordb",
+    role: "Creator & Maintainer",
+    description:
+      "Lean, keyboard-first desktop database client for PostgreSQL, SQLite, and MongoDB. Electron + TypeScript, with every destructive change previewed as SQL before it runs.",
+  },
+  {
+    name: "fcms",
+    url: "https://fcms.kickjs.app",
+    role: "Creator & Maintainer",
+    description:
+      "Self-hostable CMS where your whole site is one readable file — edited through the admin, the CLI, or an AI agent over MCP. Embedded Postgres, zero setup.",
+  },
+  {
+    name: "Forinda RTC SDK",
+    url: "https://github.com/forinda/forinda-rtc-sdk",
+    role: "Creator & Maintainer",
+    description:
+      "Framework-agnostic WebRTC SDK — publish, view, chat, screen-share, and record from TypeScript, React, Vue, or Web Components against any signaling backend. Core is ~8 KB gzipped.",
+  },
   {
     name: "nuxt-swal",
     url: "https://github.com/forinda/nuxt-swal",
@@ -188,9 +219,9 @@ export const certifications = [
 export const socialLinks = {
   github: "https://github.com/forinda",
   linkedin: "https://www.linkedin.com/in/felixorinda",
-  kickjsDocs: "https://forinda.github.io/kick-js",
+  kickjsDocs: "https://kickjs.app",
   email: "forinda82@gmail.com",
 };
 
 export const shortBio =
-  "Felix Orinda is a software engineer based in Nairobi, Kenya, and the creator of KickJS — an open-source, decorator-driven Node.js framework with 19 packages and docs in 8 languages. He builds for Africa and beyond.";
+  "Felix Orinda is a software engineer based in Nairobi, Kenya, and the creator of KickJS — an open-source, decorator-driven Node.js framework with 17 packages — and of fordb and fcms. He builds for Africa and beyond.";

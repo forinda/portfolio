@@ -6,7 +6,7 @@ export function meta({}: Route.MetaArgs) {
   return seo({
     title: "Felix Orinda | Software Engineer",
     description:
-      "Software engineer based in Nairobi, Kenya. Creator of KickJS — a 19-package Node.js framework. Designing and shipping production software across fintech, healthcare, SaaS, and data/AI.",
+      "Software engineer based in Nairobi, Kenya. Creator of KickJS, fordb, and fcms. Designing and shipping production software across fintech, healthcare, SaaS, and data/AI.",
     url: "https://felixorinda.dev",
     image: "https://felixorinda.dev/og-image.png",
     siteName: "Felix Orinda",

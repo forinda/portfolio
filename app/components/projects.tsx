@@ -9,7 +9,7 @@ export function Projects() {
         <div className="relative mb-8 md:mb-10">
           <span
             aria-hidden
-            className="heading-display text-[8rem] md:text-[14rem] text-gray-100 dark:text-white/[0.04] absolute -top-12 md:-top-20 -left-4 select-none pointer-events-none leading-none"
+            className="heading-display text-[8rem] md:text-[14rem] text-gray-100 dark:text-white/4 absolute -top-12 md:-top-20 -left-4 select-none pointer-events-none leading-none"
           >
             04
           </span>
@@ -28,7 +28,7 @@ export function Projects() {
         <div className="space-y-16 md:space-y-0 md:grid md:grid-cols-12 md:gap-8">
           {projects.map((project, i) => {
             const isEven = i % 2 === 0;
-            const colSpan = i === 0 || i === 3 ? "md:col-span-7" : "md:col-span-5";
+            const colSpan = i % 4 === 0 || i % 4 === 3 ? "md:col-span-7" : "md:col-span-5";
             const offset = isEven ? "" : "md:mt-24";
             return (
               <FadeIn
