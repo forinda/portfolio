@@ -7,28 +7,33 @@ interface SeoProps {
   imageHeight?: string;
   siteName?: string;
   locale?: string;
-  type?: string;
-  twitterCard?: "summary" | "summary_large_image" | "app" | "player";
+  type?: "website" | "article";
+  twitterCard?: "summary" | "summary_large_image";
   twitterHandle?: string;
   author?: string;
   keywords?: string;
   canonical?: string;
   noIndex?: boolean;
+  publishedTime?: string;
+  modifiedTime?: string;
+  tags?: string[];
+  jsonLd?: object | object[];
 }
 
 type MetaEntry =
   | { title: string }
   | { name: string; content: string }
   | { property: string; content: string }
-  | { tagName: "link"; rel: string; href: string };
+  | { tagName: "link"; rel: string; href: string }
+  | { "script:ld+json": object };
 
 export function seo({
   title,
   description,
   url,
   image,
-  imageWidth = "1200",
-  imageHeight = "630",
+  imageWidth,
+  imageHeight,
   siteName,
   locale = "en_US",
   type = "website",
@@ -38,52 +43,43 @@ export function seo({
   keywords,
   canonical,
   noIndex = false,
+  publishedTime,
+  modifiedTime,
+  tags = [],
+  jsonLd,
 }: SeoProps): MetaEntry[] {
-  const meta: MetaEntry[] = [
-    { title },
-    { name: "description", content: description },
-  ];
+  const meta: MetaEntry[] = [{ title }, { name: "description", content: description }];
 
-  if (noIndex) {
-    meta.push({ name: "robots", content: "noindex, nofollow" });
-  }
+  if (noIndex) meta.push({ name: "robots", content: "noindex, nofollow" });
+  if (canonical) meta.push({ tagName: "link", rel: "canonical", href: canonical });
 
-  // Open Graph
   meta.push(
     { property: "og:type", content: type },
     { property: "og:title", content: title },
     { property: "og:description", content: description },
+    { property: "og:locale", content: locale },
   );
-
-  if (url) {
-    meta.push({ property: "og:url", content: url });
-  }
-
+  if (url) meta.push({ property: "og:url", content: url });
+  if (siteName) meta.push({ property: "og:site_name", content: siteName });
   if (image) {
-    meta.push(
-      { property: "og:image", content: image },
-      { property: "og:image:width", content: imageWidth },
-      { property: "og:image:height", content: imageHeight },
-    );
+    meta.push({ property: "og:image", content: image });
+    if (imageWidth) meta.push({ property: "og:image:width", content: imageWidth });
+    if (imageHeight) meta.push({ property: "og:image:height", content: imageHeight });
   }
 
-  if (siteName) {
-    meta.push({ property: "og:site_name", content: siteName });
+  if (type === "article") {
+    if (publishedTime) meta.push({ property: "article:published_time", content: publishedTime });
+    if (modifiedTime) meta.push({ property: "article:modified_time", content: modifiedTime });
+    if (author) meta.push({ property: "article:author", content: author });
+    for (const tag of tags) meta.push({ property: "article:tag", content: tag });
   }
 
-  meta.push({ property: "og:locale", content: locale });
-
-  // Twitter Card
   meta.push(
     { name: "twitter:card", content: twitterCard },
     { name: "twitter:title", content: title },
     { name: "twitter:description", content: description },
   );
-
-  if (image) {
-    meta.push({ name: "twitter:image", content: image });
-  }
-
+  if (image) meta.push({ name: "twitter:image", content: image });
   if (twitterHandle) {
     meta.push(
       { name: "twitter:site", content: twitterHandle },
@@ -91,17 +87,13 @@ export function seo({
     );
   }
 
-  // Extras
-  if (author) {
-    meta.push({ name: "author", content: author });
-  }
+  if (author) meta.push({ name: "author", content: author });
+  if (keywords) meta.push({ name: "keywords", content: keywords });
 
-  if (keywords) {
-    meta.push({ name: "keywords", content: keywords });
-  }
-
-  if (canonical) {
-    meta.push({ tagName: "link", rel: "canonical", href: canonical });
+  if (jsonLd) {
+    for (const item of Array.isArray(jsonLd) ? jsonLd : [jsonLd]) {
+      meta.push({ "script:ld+json": item });
+    }
   }
 
   return meta;
