@@ -6,15 +6,8 @@ export const hero = {
 
 export const about = {
   paragraphs: [
-    "I started coding during my Computer Science studies at Egerton University and quickly moved beyond coursework into real-world production systems. My curiosity wasn't satisfied by just using tools — I wanted to understand how they worked at the deepest level.",
-    "That curiosity led me to build KickJS: a full Node.js framework that started as a personal scaffolding tool and grew into a 17-package ecosystem running on Express, Fastify, or h3. Building it forced me to understand middleware pipelines under load, dependency injection containers, graceful shutdowns, and every layer of a production system.",
-    "I've shipped software for real companies — from AI research platforms to data collaboration systems to urban intelligence tools. I write clean, well-documented, handoff-ready code and communicate proactively so stakeholders always know where things stand.",
-  ],
-  stats: [
-    { value: "3+", label: "Years Experience" },
-    { value: "17", label: "NPM Packages" },
-    { value: "3", label: "Open-Source Products" },
-    { value: "5+", label: "Industries Served" },
+    "I started coding while studying Computer Science at Egerton University and moved quickly from coursework to production systems. Using tools was never enough; I wanted to know how they worked underneath.",
+    "That curiosity became KickJS, a framework that began as a scaffolding script and grew into 17 packages running on Express, Fastify or h3. Today I ship production platforms at Datawise Africa and keep building open-source tools: fcms, fordb and a WebRTC SDK.",
   ],
 };
 
@@ -174,7 +167,7 @@ export const experience = [
       "Designed and built backend services, APIs, and data pipelines for production systems.",
   },
   {
-    title: "Software Developer",
+    title: "Software Developer (part-time)",
     company: "uTest",
     period: "Jul 2022 – Present",
     description:
@@ -194,6 +187,10 @@ export const certifications = [
   "JavaScript: The Tricky Bits",
   "Learning ECMAScript 6+ (ES6+)",
   "Docker for Developers",
+];
+
+export const awards = [
+  { name: "Microsoft Learn Student Ambassador", detail: "Microsoft, January 2022" },
 ];
 
 export const socialLinks = {

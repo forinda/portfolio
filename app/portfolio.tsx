@@ -5,7 +5,6 @@ import { Experience } from "~/components/experience";
 import { Footer } from "~/components/footer";
 import { Hero } from "~/components/hero";
 import { Navbar } from "~/components/navbar";
-import { Skills } from "~/components/skills";
 import { OtherWork, Work } from "~/components/work";
 
 export function Portfolio() {
@@ -17,7 +16,6 @@ export function Portfolio() {
         <Work />
         <OtherWork />
         <About />
-        <Skills />
         <Experience />
         <Education />
         <Contact />
