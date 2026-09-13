@@ -4,8 +4,6 @@ export {
   IconBrandGithub as GitHubIcon,
   IconBrandLinkedin as LinkedInIcon,
   IconExternalLink as ExternalLinkIcon,
-  IconMenu2 as MenuIcon,
-  IconX as CloseIcon,
   IconChevronDown as ArrowDownIcon,
   IconAward as AwardIcon,
   IconBrandTypescript as TypeScriptIcon,
@@ -66,6 +64,22 @@ export function CheckIcon(props: IconProps) {
   return (
     <Svg {...props}>
       <path d="M5 12l5 5L20 7" />
+    </Svg>
+  );
+}
+
+export function MenuIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M4 7h16M4 12h16M4 17h16" />
+    </Svg>
+  );
+}
+
+export function CloseIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M18 6 6 18M6 6l12 12" />
     </Svg>
   );
 }

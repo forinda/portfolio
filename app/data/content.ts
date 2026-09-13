@@ -1,14 +1,7 @@
 export const hero = {
-  name: "Felix Orinda",
-  taglines: [
-    "Software Engineer",
-    "Framework Author",
-    "Building for Africa & Beyond",
-  ],
-  oneLiner:
-    "I design and ship production software across fintech, healthcare, SaaS, and data/AI — and I built the framework to build them faster.",
-  paragraph:
-    "I'm a software engineer based in Nairobi, Kenya, with a BSc in Computer Science from Egerton University and 3+ years shipping production systems. Most developers choose a framework. I built one — KickJS, an open-source, decorator-driven Node.js framework with 17 npm packages — plus fordb, a desktop database client, and fcms, a self-hostable CMS.",
+  statement: "Software engineer in Nairobi, making tools other developers build on.",
+  intro:
+    "I build KickJS, fcms, fordb and the Forinda RTC SDK in the open, and ship production platforms as a software engineer at Datawise Africa.",
 };
 
 export const about = {
