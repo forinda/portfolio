@@ -5,10 +5,13 @@ export function CopyButton({
   getText,
   label,
   className = "",
+  showText = false,
 }: {
   getText: () => string;
   label: string;
   className?: string;
+  /** Show the label as visible text instead of a copy icon. */
+  showText?: boolean;
 }) {
   const [copied, setCopied] = useState(false);
 
@@ -27,10 +30,16 @@ export function CopyButton({
       <button
         type="button"
         onClick={copy}
-        aria-label={label}
-        className={`text-ink-muted transition-colors hover:text-ink ${className}`}
+        aria-label={showText ? undefined : label}
+        className={showText ? className : `text-ink-muted transition-colors hover:text-ink ${className}`}
       >
-        {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
+        {showText ? (
+          copied ? "Copied" : label
+        ) : copied ? (
+          <CheckIcon className="size-4" />
+        ) : (
+          <CopyIcon className="size-4" />
+        )}
       </button>
       <span className="sr-only" aria-live="polite">
         {copied ? "Copied" : ""}

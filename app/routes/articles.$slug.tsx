@@ -3,6 +3,7 @@ import { data } from "react-router";
 import type { Route } from "./+types/articles.$slug";
 import { CodeBlock } from "~/components/code-block";
 import { container } from "~/components/section";
+import { ShareLinks } from "~/components/share-links";
 import { loadArticleBody, type ArticleBody } from "~/lib/article-body";
 import { getArticle, listArticles } from "~/lib/articles.server";
 import { lastModified, type TocEntry } from "~/lib/frontmatter";
@@ -88,8 +89,9 @@ function TocList({ toc }: { toc: TocEntry[] }) {
 }
 
 export default function ArticlePage({ loaderData }: Route.ComponentProps) {
-  const { article, toc, newer, older } = loaderData;
+  const { origin, article, toc, newer, older } = loaderData;
   const Body = bodyFor(article.slug);
+  const shareUrl = `${origin}/articles/${article.slug}`;
   const showToc = toc.length >= 3;
 
   return (
@@ -113,6 +115,7 @@ export default function ArticlePage({ loaderData }: Route.ComponentProps) {
           )}
           {article.tags.length > 0 && <p>{article.tags.join(", ")}</p>}
         </div>
+        <ShareLinks url={shareUrl} title={article.title} />
       </header>
 
       <div
@@ -141,6 +144,7 @@ export default function ArticlePage({ loaderData }: Route.ComponentProps) {
       </div>
 
       <footer className="mt-16 flex max-w-[68ch] flex-col gap-8 border-t border-rule pt-8">
+        <ShareLinks url={shareUrl} title={article.title} />
         {(newer || older) && (
           <nav aria-label="More articles" className="grid gap-6 sm:grid-cols-2">
             {newer && (
