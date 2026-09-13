@@ -166,13 +166,6 @@ export const experience = [
     description:
       "Designed and built backend services, APIs, and data pipelines for production systems.",
   },
-  {
-    title: "Software Developer (part-time)",
-    company: "uTest",
-    period: "Jul 2022 – Present",
-    description:
-      "Remote software development, testing, and quality engineering across client projects.",
-  },
 ];
 
 export const education = {
