@@ -84,9 +84,13 @@ There is a real trade-off here. The auth guide says it plainly: each project now
 
 ## How the migration was handled
 
-Deprecating a package that people installed is a promise to them, so each one says where to go. The npm notices for the merged packages say what to import from `@forinda/kickjs` instead and mark the final release. The notices for the recipe packages point to the guide that replaces them. The docs describe the migrations as one-way and additive: you move code into your project, you don't lose behaviour.
+When I started, KickJS was just primitives, and I wasn't sure yet how they would hold up. I was also learning how to roll out a project of this size. I didn't know whether anyone else was using it, but I was building side projects on it myself, and those projects showed me the issues.
 
-{/* CONFIRM: If you know how many projects or users were affected, or how feedback came in, add it here. Otherwise delete this comment. */}
+Releases were their own problem. For a long stretch I was shipping major version after major version. It was around version 3 that plugins and adapters arrived, and with them the philosophy KickJS still follows: an adaptable framework that conforms to your thinking and your opinions, not mine.
+
+That philosophy shaped how I handled the breaking change to authentication. Instead of removing the package and leaving people to rebuild it, I wrote bring-your-own implementations. They show how KickJS did auth, expressed in your own code. Moving to the next major release then means refactoring only the pieces that need it, so the application keeps working the way it did before.
+
+Every deprecated package also says where to go next. The npm notices for the merged packages say what to import from `@forinda/kickjs` instead and mark the final release. The notices for the recipe packages point to the guide that replaces them. The docs describe these migrations as one-way and additive: you move code into your project, and you don't lose behaviour.
 
 ## A Kenyan building for the world
 
