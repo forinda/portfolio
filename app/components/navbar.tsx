@@ -4,10 +4,11 @@ import { container } from "./section";
 import { ThemeToggle } from "./theme-toggle";
 
 const navItems = [
-  { label: "Work", href: "#work" },
-  { label: "About", href: "#about" },
-  { label: "Experience", href: "#experience" },
-  { label: "Contact", href: "#contact" },
+  { label: "Work", href: "/#work" },
+  { label: "Articles", href: "/articles" },
+  { label: "About", href: "/#about" },
+  { label: "Experience", href: "/#experience" },
+  { label: "Contact", href: "/#contact" },
 ];
 
 export function Navbar() {
@@ -35,36 +36,38 @@ export function Navbar() {
   }, [open]);
 
   return (
-    <header id="top" className={`${container} flex items-center justify-between py-6`}>
-      <a href="#top" className="font-serif text-xl">
-        Felix Orinda
-      </a>
+    <header id="top" className="sticky top-0 z-40 border-b border-rule bg-paper">
+      <div className={`${container} flex items-center justify-between py-4`}>
+        <a href="/" className="font-serif text-xl">
+          Felix Orinda
+        </a>
 
-      <nav aria-label="Primary" className="hidden md:block">
-        <ul className="flex gap-8 text-sm">
-          {navItems.map((item) => (
-            <li key={item.href}>
-              <a href={item.href} className="text-ink-muted transition-colors hover:text-ink">
-                {item.label}
-              </a>
-            </li>
-          ))}
-        </ul>
-      </nav>
+        <nav aria-label="Primary" className="hidden md:block">
+          <ul className="flex gap-8 text-sm">
+            {navItems.map((item) => (
+              <li key={item.href}>
+                <a href={item.href} className="text-ink-muted transition-colors hover:text-ink">
+                  {item.label}
+                </a>
+              </li>
+            ))}
+          </ul>
+        </nav>
 
-      <div className="flex items-center gap-5">
-        <ThemeToggle />
-        <button
-          ref={openButton}
-          type="button"
-          onClick={() => setOpen(true)}
-          aria-label="Open menu"
-          aria-expanded={open}
-          aria-controls="mobile-menu"
-          className="-m-2 p-2 text-ink-muted transition-colors hover:text-ink md:hidden"
-        >
-          <MenuIcon className="size-6" />
-        </button>
+        <div className="flex items-center gap-5">
+          <ThemeToggle />
+          <button
+            ref={openButton}
+            type="button"
+            onClick={() => setOpen(true)}
+            aria-label="Open menu"
+            aria-expanded={open}
+            aria-controls="mobile-menu"
+            className="-m-2 p-2 text-ink-muted transition-colors hover:text-ink md:hidden"
+          >
+            <MenuIcon className="size-6" />
+          </button>
+        </div>
       </div>
 
       {open && (
@@ -75,7 +78,7 @@ export function Navbar() {
           aria-label="Menu"
           className="fixed inset-0 z-50 flex flex-col bg-paper md:hidden"
         >
-          <div className={`${container} flex justify-end py-6`}>
+          <div className={`${container} flex justify-end py-4`}>
             <button
               ref={closeButton}
               type="button"

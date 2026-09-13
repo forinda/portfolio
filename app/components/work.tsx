@@ -1,6 +1,5 @@
-import { useState } from "react";
 import { clientWork, kickjs, products, type Link } from "~/data/content";
-import { CheckIcon, CopyIcon } from "./icons";
+import { CopyButton } from "./copy-button";
 import { Section } from "./section";
 
 function Links({ links }: { links: Link[] }) {
@@ -19,35 +18,13 @@ function Links({ links }: { links: Link[] }) {
 }
 
 function CopyCommand({ command }: { command: string }) {
-  const [copied, setCopied] = useState(false);
-
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard blocked: the command stays visible and selectable.
-    }
-  };
-
   return (
     <div className="flex items-center justify-between gap-4 border border-rule px-4 py-3 font-mono text-[0.8125rem]">
       <code className="overflow-x-auto whitespace-nowrap">
         <span className="select-none text-ink-muted">$ </span>
         {command}
       </code>
-      <button
-        type="button"
-        onClick={copy}
-        aria-label="Copy install command"
-        className="shrink-0 text-ink-muted transition-colors hover:text-ink"
-      >
-        {copied ? <CheckIcon className="size-4" /> : <CopyIcon className="size-4" />}
-      </button>
-      <span className="sr-only" aria-live="polite">
-        {copied ? "Copied" : ""}
-      </span>
+      <CopyButton getText={() => command} label="Copy install command" className="shrink-0" />
     </div>
   );
 }

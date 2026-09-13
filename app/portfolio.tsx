@@ -2,25 +2,22 @@ import { About } from "~/components/about";
 import { Contact } from "~/components/contact";
 import { Education } from "~/components/education";
 import { Experience } from "~/components/experience";
-import { Footer } from "~/components/footer";
 import { Hero } from "~/components/hero";
-import { Navbar } from "~/components/navbar";
 import { OtherWork, Work } from "~/components/work";
+import { Writing } from "~/components/writing";
+import type { ArticleMeta } from "~/lib/frontmatter";
 
-export function Portfolio() {
+export function Portfolio({ articles }: { articles: ArticleMeta[] }) {
   return (
     <>
-      <Navbar />
-      <main>
-        <Hero />
-        <Work />
-        <OtherWork />
-        <About />
-        <Experience />
-        <Education />
-        <Contact />
-      </main>
-      <Footer />
+      <Hero />
+      <Work />
+      <OtherWork />
+      <Writing articles={articles} />
+      <About />
+      <Experience />
+      <Education />
+      <Contact />
     </>
   );
 }
