@@ -1,20 +1,5 @@
 import type { ReactNode } from "react";
 
-export {
-  IconBrandGithub as GitHubIcon,
-  IconBrandLinkedin as LinkedInIcon,
-  IconExternalLink as ExternalLinkIcon,
-  IconChevronDown as ArrowDownIcon,
-  IconAward as AwardIcon,
-  IconBrandTypescript as TypeScriptIcon,
-  IconTerminal2 as TerminalIcon,
-  IconArrowUp as ArrowUpIcon,
-  IconBriefcase as BriefcaseIcon,
-  IconSchool as SchoolIcon,
-  IconMapPin as MapPinIcon,
-  IconMail as MailIcon,
-} from "@tabler/icons-react";
-
 type IconProps = { className?: string };
 
 function Svg({ className, children }: IconProps & { children: ReactNode }) {
