@@ -6,7 +6,7 @@ tags: [kickjs, nodejs, open-source, africa]
 draft: true
 ---
 
-KickJS is a decorator-driven Node.js framework for TypeScript. Today it is 17 npm packages, runs on Express, Fastify or h3, and deploys to Node, Bun, Deno and Cloudflare Workers. It did not start that way, and it did not stay the biggest it ever was. This is the story of how it grew, why I deliberately made it smaller, and why it matters to me that a Kenyan engineer is building a layer other developers install.
+[KickJS](https://kickjs.app) is a decorator-driven Node.js framework for TypeScript. Today it is 17 npm packages, runs on Express, Fastify or h3, and deploys to Node, Bun, Deno and Cloudflare Workers. It did not start that way, and it did not stay the biggest it ever was. This is the story of how it grew, why I deliberately made it smaller, and why it matters to me that a Kenyan engineer is building a layer other developers install.
 
 ## Where KickJS started
 
@@ -32,7 +32,7 @@ Feedback speed mattered most. KickJS is built on Vite, which reloads a TypeScrip
 
 The goal became a framework that sits between Express and NestJS: the structure of decorators, modules and dependency injection, without giving up control of what runs underneath.
 
-A controller in KickJS doesn't know which HTTP engine it runs on. It speaks a request context, and the engine is chosen once, at bootstrap:
+A controller in KickJS doesn't know which HTTP engine it runs on. It speaks a request context, and the engine is chosen once, at bootstrap (the [HTTP runtimes guide](https://kickjs.app/guide/http-runtimes) explains how):
 
 ```ts title="src/index.ts"
 import { bootstrap } from '@forinda/kickjs'
@@ -42,7 +42,7 @@ import { fastifyRuntime } from '@forinda/kickjs/fastify'
 export const app = await bootstrap({ modules, runtime: fastifyRuntime() })
 ```
 
-Around that core came the pieces a production API needs: a CLI that scaffolds projects and modules, Vite-powered hot reload, type generation so route params and responses are typed end to end, a typed fetch client for the frontend, OpenAPI generation from Zod schemas, and an entry point that runs the same app as a `fetch` handler on Cloudflare Workers, Bun and Deno.
+Around that core came the pieces a production API needs: a CLI that scaffolds projects and modules, Vite-powered hot reload, type generation so route params and responses are typed end to end, a typed fetch client for the frontend, OpenAPI generation from Zod schemas, and an [edge entry point](https://kickjs.app/guide/edge-deployment) that runs the same app as a `fetch` handler on Cloudflare Workers, Bun and Deno.
 
 ## Why it got smaller
 
@@ -51,10 +51,10 @@ At its widest, KickJS also shipped packages for authentication, cron jobs, email
 They fall into three groups:
 
 - **Merged into the core.** `@forinda/kickjs-core`, `@forinda/kickjs-http` and `@forinda/kickjs-config` became part of `@forinda/kickjs`. Each got a final release telling you what to import instead.
-- **Replaced by recipes you own.** `auth`, `cron`, `mailer`, `otel`, `graphql`, `multi-tenant` and `notifications` stopped being packages. Each has a guide showing how to build the same thing in your project.
+- **Replaced by recipes you own.** `auth`, `cron`, `mailer`, `otel`, `graphql`, `multi-tenant` and `notifications` stopped being packages. Each has a [guide](https://kickjs.app/guide/byo-recipes) showing how to build the same thing in your project.
 - **Replaced by a native database layer.** The Prisma and Drizzle adapters were early experiments. `@forinda/kickjs-db` took their place.
 
-The reasoning is written into the KickJS docs. Domain layers like auth, multi-tenancy, audit and observability vary from project to project: different claim shapes, different session stores, different policy rules. When a framework ships an opinionated package for one of those, two things happen. Teams with edge cases either fork it or ask for features that grow the package for everyone. And the framework's release cycle gets tied to that domain, so upgrading the framework forces you to review your auth.
+The reasoning is written into the [KickJS docs](https://kickjs.app/guide/byo-recipes). Domain layers like auth, multi-tenancy, audit and observability vary from project to project: different claim shapes, different session stores, different policy rules. When a framework ships an opinionated package for one of those, two things happen. Teams with edge cases either fork it or ask for features that grow the package for everyone. And the framework's release cycle gets tied to that domain, so upgrading the framework forces you to review your auth.
 
 For me the moment was concrete. I bootstrapped an application that needed third-party authentication, and with the auth package everything was already wired up: plugins for every piece, setup done, all of it working. Then I realised how much magic that was. If someone wanted to extend it in a way I hadn't planned for, they would have to come to me, the framework maintainer, and ask for the feature.
 
@@ -120,4 +120,15 @@ Talent is another challenge. The people who are really good get hired by the tec
 
 Established players make the market hard to enter, too. A company that already dominates can see a newcomer's idea, buy it or build its own version, and claim it. The newcomer's work never gets its chance out there. That brings it back to policy again, and to the competitive advantage a new builder needs against giants already in the market.
 
-I want to contribute to the software ecosystem as an African, and show that Africans can build products that enterprises depend on. KickJS, fcms, fordb and the Forinda RTC SDK are my attempt at that: tools other developers build on, made by a Kenyan engineer for developers anywhere. Nobody installing `@forinda/kickjs` needs to know where it was written, and that is the point.
+I want to contribute to the software ecosystem as an African, and show that Africans can build products that enterprises depend on. [KickJS](https://kickjs.app), [fcms](https://fcms.kickjs.app), [fordb](https://github.com/forinda/fordb) and the [Forinda RTC SDK](https://github.com/forinda/forinda-rtc-sdk) are my attempt at that: tools other developers build on, made by a Kenyan engineer for developers anywhere. Nobody installing `@forinda/kickjs` needs to know where it was written, and that is the point.
+
+## Find the projects
+
+Everything in this article is open source. If one of these projects is useful to you, a star on GitHub helps other developers find it.
+
+- **KickJS**, the framework: [kickjs.app](https://kickjs.app), [star it on GitHub](https://github.com/forinda/kick-js)
+- **fcms**, the self-hostable CMS: [fcms.kickjs.app](https://fcms.kickjs.app), [star it on GitHub](https://github.com/forinda/fcms)
+- **fordb**, the desktop database client: [documentation](https://forinda.github.io/fordb/), [star it on GitHub](https://github.com/forinda/fordb)
+- **Forinda RTC SDK**, WebRTC video for any framework: [documentation](https://forinda.github.io/forinda-rtc-sdk/), [star it on GitHub](https://github.com/forinda/forinda-rtc-sdk)
+
+The rest of my work is on [GitHub](https://github.com/forinda).
