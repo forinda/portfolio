@@ -5,7 +5,7 @@ import { listArticles } from "~/lib/articles.server";
 import { siteUrl } from "~/lib/site";
 import { seo } from "~/utils/seo";
 
-const description = "Notes on building developer tools and shipping open source from Nairobi.";
+const description = "Notes on building developer tools and open source for developers anywhere.";
 
 export function loader({ request }: Route.LoaderArgs) {
   return { origin: siteUrl(request), articles: listArticles() };

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { parseFrontmatter } from "./frontmatter.ts";
 
 const full = {
-  title: "Building KickJS from Nairobi",
+  title: "Building KickJS for the world",
   summary: "Why the framework was built and why it got smaller.",
   published: "2026-09-13",
   updated: "2026-09-20",
@@ -10,8 +10,8 @@ const full = {
   draft: true,
 };
 
-assert.deepEqual(parseFrontmatter("building-kickjs-from-nairobi", full), {
-  slug: "building-kickjs-from-nairobi",
+assert.deepEqual(parseFrontmatter("building-kickjs-for-the-world", full), {
+  slug: "building-kickjs-for-the-world",
   ...full,
 });
 
