@@ -15,14 +15,14 @@ export function meta({ loaderData }: Route.MetaArgs) {
   return seo({
     title: "Felix Orinda | Software Engineer",
     description:
-      "Software engineer based in Nairobi, Kenya. Creator of KickJS, fcms, fordb and the Forinda RTC SDK, and a software engineer at Datawise Africa.",
+      "Kenyan software engineer. Creator of KickJS, fcms, fordb and the Forinda RTC SDK, and a software engineer at Datawise Africa.",
     url,
     canonical: url,
     image: `${origin}/forinda.png`,
     siteName: "Felix Orinda",
     author: "Felix Orinda",
     keywords:
-      "Felix Orinda, Software Engineer, KickJS, fcms, fordb, Node.js, TypeScript, Nairobi, Kenya",
+      "Felix Orinda, Software Engineer, KickJS, fcms, fordb, Node.js, TypeScript, Kenya",
     jsonLd: [
       {
         "@context": "https://schema.org",
@@ -30,7 +30,7 @@ export function meta({ loaderData }: Route.MetaArgs) {
         name: "Felix Orinda",
         url,
         jobTitle: "Software Engineer",
-        address: { "@type": "PostalAddress", addressLocality: "Nairobi", addressCountry: "KE" },
+        nationality: { "@type": "Country", name: "Kenya" },
         sameAs: [socialLinks.github, socialLinks.linkedin],
         knowsAbout: ["TypeScript", "Node.js"],
       },

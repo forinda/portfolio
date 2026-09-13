@@ -1,5 +1,5 @@
 export const hero = {
-  statement: "Software engineer in Nairobi, making tools other developers build on.",
+  statement: "Kenyan software engineer, making tools other developers build on.",
   intro:
     "I build KickJS, fcms, fordb and the Forinda RTC SDK in the open, and ship production platforms as a software engineer at Datawise Africa.",
 };
@@ -201,4 +201,4 @@ export const socialLinks = {
 };
 
 export const shortBio =
-  "Felix Orinda is a software engineer based in Nairobi, Kenya, and the creator of KickJS — an open-source, decorator-driven Node.js framework with 17 packages — and of fordb and fcms. He builds for Africa and beyond.";
+  "Felix Orinda is a Kenyan software engineer and the creator of KickJS — an open-source, decorator-driven Node.js framework with 17 packages — and of fordb and fcms. He builds for Africa and beyond.";
