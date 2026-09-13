@@ -1,33 +1,51 @@
 import { useEffect, useState } from "react";
-import { IconSun, IconMoon } from "@tabler/icons-react";
+import { MoonIcon, SunIcon } from "./icons";
+
+function storedTheme(): string | null {
+  try {
+    return localStorage.getItem("theme");
+  } catch {
+    return null;
+  }
+}
 
 export function ThemeToggle() {
   const [dark, setDark] = useState(false);
 
   useEffect(() => {
-    const stored = localStorage.getItem("theme");
-    if (stored === "dark" || (!stored && window.matchMedia("(prefers-color-scheme: dark)").matches)) {
-      setDark(true);
-      document.documentElement.classList.add("dark");
-    }
+    const root = document.documentElement;
+    setDark(root.classList.contains("dark"));
+
+    // Follow the OS setting until the visitor picks a theme.
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = (event: MediaQueryListEvent) => {
+      if (storedTheme()) return;
+      root.classList.toggle("dark", event.matches);
+      setDark(event.matches);
+    };
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
   }, []);
 
   const toggle = () => {
-    setDark((prev) => {
-      const next = !prev;
-      document.documentElement.classList.toggle("dark", next);
+    const next = !document.documentElement.classList.contains("dark");
+    document.documentElement.classList.toggle("dark", next);
+    try {
       localStorage.setItem("theme", next ? "dark" : "light");
-      return next;
-    });
+    } catch {
+      // Storage blocked (private mode): theme still applies for this visit.
+    }
+    setDark(next);
   };
 
   return (
     <button
+      type="button"
       onClick={toggle}
-      className="p-2 rounded-full text-gray-500 hover:text-accent-600 dark:text-gray-400 dark:hover:text-accent-400 transition-colors"
-      aria-label="Toggle theme"
+      aria-label={dark ? "Switch to light theme" : "Switch to dark theme"}
+      className="-m-2 p-2 text-ink-muted transition-colors hover:text-ink"
     >
-      {dark ? <IconSun className="w-5 h-5" /> : <IconMoon className="w-5 h-5" />}
+      {dark ? <SunIcon className="size-5" /> : <MoonIcon className="size-5" />}
     </button>
   );
 }
