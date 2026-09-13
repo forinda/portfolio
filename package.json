@@ -3,9 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "react-router build",
+    "build": "react-router build && node --input-type=module -e \"await import('./build/server/server-build.js')\"",
     "dev": "react-router dev",
-    "start": "react-router-serve ./build/server/index.js",
+    "start": "react-router-serve ./build/server/server-build.js",
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {

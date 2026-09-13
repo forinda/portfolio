@@ -1,11 +1,12 @@
 import type { Route } from "./+types/home";
 import { socialLinks } from "~/data/content";
+import { listArticles } from "~/lib/articles.server";
 import { siteUrl } from "~/lib/site";
 import { Portfolio } from "~/portfolio";
 import { seo } from "~/utils/seo";
 
 export function loader({ request }: Route.LoaderArgs) {
-  return { origin: siteUrl(request) };
+  return { origin: siteUrl(request), articles: listArticles().slice(0, 3) };
 }
 
 export function meta({ loaderData }: Route.MetaArgs) {
@@ -38,6 +39,6 @@ export function meta({ loaderData }: Route.MetaArgs) {
   });
 }
 
-export default function Home() {
-  return <Portfolio />;
+export default function Home({ loaderData }: Route.ComponentProps) {
+  return <Portfolio articles={loaderData.articles} />;
 }

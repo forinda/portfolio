@@ -1,19 +1,15 @@
-import type { ComponentType } from "react";
-import { parseFrontmatter, type ArticleMeta } from "./frontmatter";
+import { parseFrontmatter, type ArticleMeta, type TocEntry } from "./frontmatter";
 
-export type { ArticleMeta };
-export type TocEntry = { depth: 2 | 3; value: string; id: string };
-export type ArticleBody = ComponentType<{ components?: Record<string, ComponentType<any>> }>;
-export type Article = { meta: ArticleMeta; toc: TocEntry[]; load: () => Promise<ArticleBody> };
+export type ArticleSummary = { meta: ArticleMeta; toc: TocEntry[] };
 
 type RawToc = Array<{ depth: number; value: string; id?: string }>;
 
+// Server-only: eager imports pull in whole MDX modules, so keep them out of the client bundle.
 const frontmatters = import.meta.glob<unknown>("../articles/*.mdx", {
   eager: true,
   import: "frontmatter",
 });
 const tocs = import.meta.glob<RawToc>("../articles/*.mdx", { eager: true, import: "toc" });
-const bodies = import.meta.glob<ArticleBody>("../articles/*.mdx", { import: "default" });
 
 function slugFromPath(path: string): string {
   return path.slice(path.lastIndexOf("/") + 1, -".mdx".length);
@@ -27,11 +23,10 @@ function toToc(raw: RawToc | undefined): TocEntry[] {
   );
 }
 
-const articles: Article[] = Object.entries(frontmatters)
+const articles: ArticleSummary[] = Object.entries(frontmatters)
   .map(([path, data]) => ({
     meta: parseFrontmatter(slugFromPath(path), data),
     toc: toToc(tocs[path]),
-    load: bodies[path],
   }))
   .filter((article) => import.meta.env.DEV || !article.meta.draft)
   .sort(
@@ -43,10 +38,6 @@ export function listArticles(): ArticleMeta[] {
   return articles.map((article) => article.meta);
 }
 
-export function getArticle(slug: string): Article | undefined {
+export function getArticle(slug: string): ArticleSummary | undefined {
   return articles.find((article) => article.meta.slug === slug);
-}
-
-export function lastModified(meta: ArticleMeta): string {
-  return meta.updated ?? meta.published;
 }

@@ -8,6 +8,12 @@ export type ArticleMeta = {
   draft: boolean;
 };
 
+export type TocEntry = { depth: 2 | 3; value: string; id: string };
+
+export function lastModified(meta: ArticleMeta): string {
+  return meta.updated ?? meta.published;
+}
+
 const SLUG = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
 
