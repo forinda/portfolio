@@ -1,8 +1,11 @@
-const CACHE = "public, max-age=3600";
+const configuredUrl = (import.meta.env.VITE_SITE_URL as string | undefined)?.replace(/\/+$/, "");
+
+// Without a configured URL, links come from the request's Host header, so a shared cache
+// could store a response built from a forged Host. Only allow public caching when configured.
+const CACHE = configuredUrl ? "public, max-age=3600" : "no-store";
 
 export function siteUrl(request: Request): string {
-  const configured = import.meta.env.VITE_SITE_URL as string | undefined;
-  return (configured || new URL(request.url).origin).replace(/\/+$/, "");
+  return configuredUrl || new URL(request.url).origin;
 }
 
 export function escapeXml(text: string): string {
