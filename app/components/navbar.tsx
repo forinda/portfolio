@@ -4,10 +4,11 @@ import { container } from "./section";
 import { ThemeToggle } from "./theme-toggle";
 
 const navItems = [
-  { label: "Work", href: "#work" },
-  { label: "About", href: "#about" },
-  { label: "Experience", href: "#experience" },
-  { label: "Contact", href: "#contact" },
+  { label: "Work", href: "/#work" },
+  { label: "Articles", href: "/articles" },
+  { label: "About", href: "/#about" },
+  { label: "Experience", href: "/#experience" },
+  { label: "Contact", href: "/#contact" },
 ];
 
 export function Navbar() {
@@ -36,7 +37,7 @@ export function Navbar() {
 
   return (
     <header id="top" className={`${container} flex items-center justify-between py-6`}>
-      <a href="#top" className="font-serif text-xl">
+      <a href="/" className="font-serif text-xl">
         Felix Orinda
       </a>
 

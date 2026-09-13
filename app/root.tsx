@@ -9,6 +9,7 @@ import {
 
 import type { Route } from "./+types/root";
 import "./app.css";
+import { container } from "./components/section";
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -51,27 +52,22 @@ export default function App() {
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
-  let message = "Oops!";
-  let details = "An unexpected error occurred.";
-  let stack: string | undefined;
-
-  if (isRouteErrorResponse(error)) {
-    message = error.status === 404 ? "404" : "Error";
-    details =
-      error.status === 404
-        ? "The requested page could not be found."
-        : error.statusText || details;
-  } else if (import.meta.env.DEV && error && error instanceof Error) {
-    details = error.message;
-    stack = error.stack;
-  }
+  const notFound = isRouteErrorResponse(error) && error.status === 404;
+  const title = notFound ? "Page not found" : "Something went wrong";
+  const details = notFound
+    ? "The page you were looking for doesn't exist or has moved."
+    : "An unexpected error stopped this page from loading.";
+  const stack = import.meta.env.DEV && error instanceof Error ? error.stack : undefined;
 
   return (
-    <main className="pt-16 p-4 container mx-auto">
-      <h1>{message}</h1>
-      <p>{details}</p>
+    <main className={`${container} flex flex-col gap-6 py-24`}>
+      <h1 className="font-serif text-[clamp(2.25rem,5vw,3.75rem)] leading-[1.08]">{title}</h1>
+      <p className="max-w-[60ch] text-[1.0625rem] leading-relaxed text-ink-muted">{details}</p>
+      <a href="/" className="link self-start">
+        Go to the homepage
+      </a>
       {stack && (
-        <pre className="w-full p-4 overflow-x-auto">
+        <pre className="overflow-x-auto border border-rule p-4 font-mono text-xs">
           <code>{stack}</code>
         </pre>
       )}
