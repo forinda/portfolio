@@ -19,6 +19,8 @@ export function meta({ loaderData }: Route.MetaArgs) {
     url,
     canonical: url,
     image: `${origin}/forinda.png`,
+    imageWidth: "1200",
+    imageHeight: "630",
     siteName: "Felix Orinda",
     author: "Felix Orinda",
     keywords:
