@@ -65,7 +65,7 @@ h3 {
   text-decoration-line: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.22em;
-  text-decoration-color: var(--rule);
+  text-decoration-color: color-mix(in oklab, currentColor 45%, transparent);
   transition:
     color 0.15s ease,
     text-decoration-color 0.15s ease;
@@ -108,15 +108,17 @@ h3 {
 }
 
 .prose a {
+  color: var(--accent);
   text-decoration-line: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 0.22em;
-  text-decoration-color: var(--rule);
+  text-decoration-color: color-mix(in oklab, var(--accent) 50%, transparent);
+  transition: text-decoration-color 0.15s ease;
 }
 
 .prose a:hover {
-  color: var(--accent);
   text-decoration-color: currentColor;
+  text-decoration-thickness: 2px;
 }
 
 .prose ul {
