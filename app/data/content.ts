@@ -66,23 +66,12 @@ export const skills = {
   ],
 };
 
+export type Link = { label: string; href: string };
+
 export const kickjs = {
+  name: "KickJS",
   summary:
-    "A production-grade, decorator-driven Node.js framework for TypeScript — NestJS ergonomics without the complexity. Runs on Express, Fastify, or h3 (swap the engine in one line), with DI, modules, generators, and end-to-end type safety powered by Zod and Vite.",
-  highlights: [
-    "Decorator-driven routing & DI",
-    "Express, Fastify or h3 runtimes",
-    "Edge-ready: Workers, Bun & Deno",
-    "Typegen + typed fetch client",
-    "Auto OpenAPI from Zod schemas",
-    "Vite HMR in ~200ms",
-  ],
-  stats: [
-    { value: "17", label: "Packages" },
-    { value: "v8", label: "Core Release" },
-    { value: "4", label: "Runtimes" },
-    { value: "MIT", label: "License" },
-  ],
+    "A production-grade, decorator-driven Node.js framework for TypeScript. NestJS ergonomics without the weight: dependency injection, modules and generators, end-to-end types from Zod and Vite, and your choice of Express, Fastify or h3 underneath.",
   quickStart: "npx @forinda/kickjs-cli new my-api",
   codeSnippet: `@Controller()
 export class HelloController {
@@ -94,80 +83,78 @@ export class HelloController {
   }
 }`,
   codeFilename: "hello.controller.ts",
-  packages: [
-    { name: "@forinda/kickjs", desc: "Core framework — DI, decorators, pluggable HTTP runtimes" },
-    { name: "@forinda/kickjs-cli", desc: "Scaffolding, generators & custom commands" },
-    { name: "@forinda/kickjs-vite", desc: "Vite plugin — single-port HMR & typegen watcher" },
-    { name: "@forinda/kickjs-client", desc: "Typed fetch client with end-to-end response types" },
-    { name: "@forinda/kickjs-db", desc: "Native ORM — code-first schema & reversible migrations" },
+  keyPackages: [
+    { name: "@forinda/kickjs", desc: "Core: DI, decorators, pluggable HTTP runtimes" },
+    { name: "@forinda/kickjs-cli", desc: "Scaffolding, generators and custom commands" },
+    { name: "@forinda/kickjs-db", desc: "Code-first ORM with reversible migrations" },
+    { name: "@forinda/kickjs-client", desc: "Typed fetch client, end-to-end response types" },
     { name: "@forinda/kickjs-ws", desc: "WebSocket controllers on ws or Socket.IO" },
-    { name: "@forinda/kickjs-ai", desc: "AI runtime — providers, tools, streaming, RAG & agents" },
-    { name: "@forinda/kickjs-mcp", desc: "Expose controllers as Model Context Protocol tools" },
-    { name: "@forinda/kickjs-swagger", desc: "OpenAPI generation, Swagger UI & ReDoc" },
-    { name: "@forinda/kickjs-schema", desc: "Validation with Zod, Valibot, Yup, Joi or any Standard Schema" },
-    { name: "@forinda/kickjs-queue", desc: "BullMQ queues & decorator-driven workers" },
-    { name: "@forinda/kickjs-grpc", desc: "gRPC, gRPC-Web & Connect served from your app" },
-    { name: "@forinda/kickjs-testing", desc: "TestModule builder & test helpers" },
-    { name: "@forinda/kickjs-devtools", desc: "Dashboard — routes, DI container, metrics, health" },
-    { name: "@forinda/kickjs-devtools-kit", desc: "Types, RPC & sampler for DevTools integrations" },
-    { name: "@forinda/kickjs-cli-kit", desc: "Contract for CLI plugins & custom generators" },
-    { name: "@forinda/kickjs-lint", desc: "Lint rules for framework conventions" },
+    { name: "@forinda/kickjs-ai", desc: "AI providers, tools, streaming, RAG and agents" },
   ],
-  links: {
-    docs: "https://kickjs.app",
-    github: "https://github.com/forinda/kick-js",
-  },
+  packageCount: 17,
+  allPackagesHref: "https://kickjs.app",
+  links: [
+    { label: "Docs", href: "https://kickjs.app" },
+    { label: "GitHub", href: "https://github.com/forinda/kick-js" },
+  ] satisfies Link[],
 };
 
-export const projects = [
-  {
-    name: "fordb",
-    url: "https://github.com/forinda/fordb",
-    role: "Creator & Maintainer",
-    description:
-      "Lean, keyboard-first desktop database client for PostgreSQL, SQLite, and MongoDB. Electron + TypeScript, with every destructive change previewed as SQL before it runs.",
-  },
+export const products: { name: string; description: string; links: Link[] }[] = [
   {
     name: "fcms",
-    url: "https://fcms.kickjs.app",
-    role: "Creator & Maintainer",
     description:
-      "Self-hostable CMS where your whole site is one readable file — edited through the admin, the CLI, or an AI agent over MCP. Embedded Postgres, zero setup.",
+      "A self-hostable CMS where your whole site is one readable file, edited through the admin, the CLI, or an AI agent over MCP. Postgres runs inside the process, so there is nothing to set up.",
+    links: [
+      { label: "Site", href: "https://fcms.kickjs.app" },
+      { label: "GitHub", href: "https://github.com/forinda/fcms" },
+    ],
+  },
+  {
+    name: "fordb",
+    description:
+      "A keyboard-first desktop client for PostgreSQL, SQLite and MongoDB. Every destructive change is shown as SQL and confirmed before it runs.",
+    links: [
+      { label: "Docs", href: "https://forinda.github.io/fordb/" },
+      { label: "GitHub", href: "https://github.com/forinda/fordb" },
+    ],
   },
   {
     name: "Forinda RTC SDK",
-    url: "https://github.com/forinda/forinda-rtc-sdk",
-    role: "Creator & Maintainer",
     description:
-      "Framework-agnostic WebRTC SDK — publish, view, chat, screen-share, and record from TypeScript, React, Vue, or Web Components against any signaling backend. Core is ~8 KB gzipped.",
+      "A framework-agnostic WebRTC SDK: publish, view, chat, share screens and record from TypeScript, React, Vue or Web Components, against any signaling backend.",
+    links: [
+      { label: "Docs", href: "https://forinda.github.io/forinda-rtc-sdk/" },
+      { label: "GitHub", href: "https://github.com/forinda/forinda-rtc-sdk" },
+    ],
   },
-  {
-    name: "nuxt-swal",
-    url: "https://github.com/forinda/nuxt-swal",
-    role: "Creator & Maintainer",
-    description:
-      "Open-source SweetAlert2 module for Nuxt 3 with global alert methods, composable API, and full TypeScript support.",
-  },
+];
+
+export const clientWork: { name: string; role: string; description: string; href: string }[] = [
   {
     name: "Datawise Africa",
-    url: "https://datawiseafrica.com",
     role: "Software Engineer",
     description:
       "Production platform for an AI and data research company partnered with Kaggle and Lacuna Fund.",
+    href: "https://datawiseafrica.com",
   },
   {
     name: "Datalab Africa",
-    url: "https://datalabafrica.com",
     role: "Software Engineer",
     description:
-      "Data collaboration platform enabling data creators to maintain ownership while giving users access to verified insights.",
+      "Data collaboration platform where data creators keep ownership and users get verified insights.",
+    href: "https://datalabafrica.com",
   },
   {
     name: "UrbanEcho",
-    url: "https://www.urbanecho.io",
     role: "Software Engineer",
-    description:
-      "Urban intelligence platform providing data-driven insights for urban planning and development.",
+    description: "Urban intelligence platform with data-driven insights for planning and development.",
+    href: "https://www.urbanecho.io",
+  },
+  {
+    name: "nuxt-swal",
+    role: "Creator",
+    description: "SweetAlert2 module for Nuxt 3 with global alert methods, a composable API and TypeScript support.",
+    href: "https://github.com/forinda/nuxt-swal",
   },
 ];
 

@@ -7,11 +7,9 @@ export {
   IconMenu2 as MenuIcon,
   IconX as CloseIcon,
   IconChevronDown as ArrowDownIcon,
-  IconCheck as CheckIcon,
   IconAward as AwardIcon,
   IconBrandTypescript as TypeScriptIcon,
   IconTerminal2 as TerminalIcon,
-  IconCopy as CopyIcon,
   IconArrowUp as ArrowUpIcon,
   IconBriefcase as BriefcaseIcon,
   IconSchool as SchoolIcon,
@@ -51,6 +49,23 @@ export function MoonIcon(props: IconProps) {
   return (
     <Svg {...props}>
       <path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z" />
+    </Svg>
+  );
+}
+
+export function CopyIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <rect x="8" y="8" width="12" height="12" rx="2" />
+      <path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" />
+    </Svg>
+  );
+}
+
+export function CheckIcon(props: IconProps) {
+  return (
+    <Svg {...props}>
+      <path d="M5 12l5 5L20 7" />
     </Svg>
   );
 }

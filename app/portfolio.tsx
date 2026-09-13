@@ -1,13 +1,12 @@
-import { Navbar } from "~/components/navbar";
-import { Hero } from "~/components/hero";
 import { About } from "~/components/about";
-import { Skills } from "~/components/skills";
-import { KickJS } from "~/components/kickjs";
-import { Projects } from "~/components/projects";
-import { Experience } from "~/components/experience";
-import { Education } from "~/components/education";
 import { Contact } from "~/components/contact";
+import { Education } from "~/components/education";
+import { Experience } from "~/components/experience";
 import { Footer } from "~/components/footer";
+import { Hero } from "~/components/hero";
+import { Navbar } from "~/components/navbar";
+import { Skills } from "~/components/skills";
+import { OtherWork, Work } from "~/components/work";
 
 export function Portfolio() {
   return (
@@ -15,10 +14,10 @@ export function Portfolio() {
       <Navbar />
       <main>
         <Hero />
+        <Work />
+        <OtherWork />
         <About />
         <Skills />
-        <KickJS />
-        <Projects />
         <Experience />
         <Education />
         <Contact />
