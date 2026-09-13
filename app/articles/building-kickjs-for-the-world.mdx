@@ -6,23 +6,49 @@ tags: [kickjs, nodejs, open-source, africa]
 draft: true
 ---
 
-KickJS is a decorator-driven Node.js framework for TypeScript. This is the story of why it exists, why twelve of its packages are now deprecated, and why it matters to me as a Kenyan building for the world.
+KickJS is a decorator-driven Node.js framework for TypeScript. Today it is 17 npm packages, runs on Express, Fastify or h3, and deploys to Node, Bun, Deno and Cloudflare Workers. It did not start that way, and it did not stay the biggest it ever was. This is the story of how it grew, why I deliberately made it smaller, and why it matters to me that a Kenyan engineer is building a layer other developers install.
 
 ## Where KickJS started
 
-It began as a personal scaffolding tool: a faster way to start the same kind of API project again and again.
+KickJS started as a personal scaffolding tool. I kept setting up the same kind of API project: the same folder structure, the same wiring for configuration, validation and routing. A generator that did that in seconds was the first version.
+
+The repository's first commit is from 20 September 2025, and the first releases, 0.1.3 and 0.1.4, went out the same day. A month later, on 29 October, the commit history says "Add base infrastructure core for Kickjs". That is the point where a scaffolding tool started turning into a framework.
+
+{/* CONFIRM: Is there a specific project or frustration that pushed you to start it? Add one or two sentences in your own words, or delete this comment. */}
 
 ## What it grew into
 
-Over time it became a framework between Express's flexibility and NestJS's weight, with decorators and dependency injection for structure and a pluggable HTTP engine underneath.
+The goal became a framework that sits between Express and NestJS: the structure of decorators, modules and dependency injection, without giving up control of what runs underneath.
+
+A controller in KickJS doesn't know which HTTP engine it runs on. It speaks a request context, and the engine is chosen once, at bootstrap:
+
+```ts title="src/index.ts"
+import { bootstrap } from '@forinda/kickjs'
+import { fastifyRuntime } from '@forinda/kickjs/fastify'
+
+// Express is the default. Fastify is one option away, with the same modules and controllers.
+export const app = await bootstrap({ modules, runtime: fastifyRuntime() })
+```
+
+Around that core came the pieces a production API needs: a CLI that scaffolds projects and modules, Vite-powered hot reload, type generation so route params and responses are typed end to end, a typed fetch client for the frontend, OpenAPI generation from Zod schemas, and an entry point that runs the same app as a `fetch` handler on Cloudflare Workers, Bun and Deno.
 
 ## Why it got smaller
 
-Twelve official packages were deprecated in favour of a small core and recipes you own.
+At its widest, KickJS also shipped packages for authentication, cron jobs, email, OpenTelemetry, GraphQL, multi-tenancy, notifications, and adapters for Prisma and Drizzle. Twelve of those packages are now deprecated on npm.
+
+They fall into three groups:
+
+- **Merged into the core.** `@forinda/kickjs-core`, `@forinda/kickjs-http` and `@forinda/kickjs-config` became part of `@forinda/kickjs`. Each got a final release telling you what to import instead.
+- **Replaced by recipes you own.** `auth`, `cron`, `mailer`, `otel`, `graphql`, `multi-tenant` and `notifications` stopped being packages. Each has a guide showing how to build the same thing in your project.
+- **Replaced by a native database layer.** The Prisma and Drizzle adapters were early experiments. `@forinda/kickjs-db` took their place.
+
+The reasoning is written into the KickJS docs. Domain layers like auth, multi-tenancy, audit and observability vary from project to project: different claim shapes, different session stores, different policy rules. When a framework ships an opinionated package for one of those, two things happen. Teams with edge cases either fork it or ask for features that grow the package for everyone. And the framework's release cycle gets tied to that domain, so upgrading the framework forces you to review your auth.
+
+{/* CONFIRM: Was there a moment or a specific support burden that made you decide? Add it if you want the section to feel personal. */}
 
 ## What replaced the packages
 
-The framework keeps shipping primitives. An adapter that used to be a package is now a few lines in your project:
+KickJS keeps shipping the primitives those packages were built from: `defineAdapter`, `definePlugin`, `defineContextDecorator` and the dependency injection container. An adapter that used to be a package becomes a few lines in your own code:
 
 ```ts title="src/auth/auth-adapter.ts"
 import { defineAdapter } from '@forinda/kickjs'
@@ -46,6 +72,20 @@ export const AuthAdapter = defineAdapter<AuthAdapterOptions>({
 })
 ```
 
+There is a real trade-off here. The auth guide says it plainly: each project now owns roughly 200 lines of auth code, and the framework owns only the primitives. In exchange, your auth changes when your product needs it to, not when KickJS releases.
+
+## How the migration was handled
+
+Deprecating a package that people installed is a promise to them, so each one says where to go. The npm notices for the merged packages say what to import from `@forinda/kickjs` instead and mark the final release. The notices for the recipe packages point to the guide that replaces them. The docs describe the migrations as one-way and additive: you move code into your project, you don't lose behaviour.
+
+{/* CONFIRM: If you know how many projects or users were affected, or how feedback came in, add it here. Otherwise delete this comment. */}
+
 ## A Kenyan building for the world
 
-KickJS, fcms, fordb and the Forinda RTC SDK are tools other developers build on, made by a Kenyan engineer for developers anywhere.
+{/* CONFIRM: This whole section is your voice. Rewrite freely; the draft only uses what your portfolio already says. */}
+
+KickJS, fcms, fordb and the Forinda RTC SDK have something in common: they are tools other developers build on. Nobody installing `@forinda/kickjs` needs to know where it was written, and that is the point.
+
+{/* CONFIRM: Your view on Kenyan and African engineers building infrastructure for the world, not only applications on top of it. */}
+
+Most conversations about software from Africa are about the applications built here. I want to add a different example to that picture: a Kenyan engineer designing, maintaining and making hard decisions about a production framework, including the decision to make it smaller. That work is the same wherever it is done, and it can be used anywhere.
