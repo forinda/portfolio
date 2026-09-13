@@ -16,9 +16,17 @@ The repository's first commit is from 20 September 2025, and the first releases,
 
 The frustration behind it was with the established frameworks. NestJS and platforms like it come with strong opinions about how things are done, a lot of boilerplate, and a lot happening behind the scenes. That makes it hard to understand what your own application is actually doing. Django is a similar case: it abstracts so much away from the developer that the path a request takes is easy to lose.
 
+{/* CONFIRM: "Django" is from a voice note that said "jungle". Correct the name if you meant a different framework. */}
+
 I wanted the opposite: transparency. A mathematical function takes an input and returns an output, and you can read the processing in between. I wanted a framework to work the same way: this is where the request comes in, this is where the response goes out, and the logic between them is plain code, not magic.
 
-{/* CONFIRM: "Django" is from a voice note that said "jungle". Correct the name if you meant a different framework. */}
+Structure was the other half of the problem. When I moved to large-scale software, Express's primitives started to hurt. Express has no structured way of doing things, so folders drift and every team writes code differently. Many of us learn through apprenticeship or YouTube videos, and we write software the way we saw someone else write it. Spring Boot and Django are different: there are expected folders, naming conventions and a place for each thing. NestJS brings that kind of structure to Node.js, but it felt heavy. I wanted something lighter.
+
+Then there was the setup. Before writing any real code I would wire up about five tools: path aliases, a correctly configured TypeScript compiler, a build tool that transpiles while still letting me type-check, and a dependency injection library, where I went back and forth between options like tsyringe and InversifyJS. Putting all of that inside KickJS, so you don't install thirty packages before you start, became one of its main goals.
+
+{/* CONFIRM: "tsyringe" is a guess from a voice note that said "DC range". Correct the library name if needed. */}
+
+Feedback speed mattered most. KickJS is built on Vite, which reloads a TypeScript change in milliseconds. Other setups I tried, transpiling and then restarting, could take several seconds or even a minute. If every save costs you thirty seconds, those seconds eat a real part of an eight-hour day. Vite has become the standard on the frontend, and I wanted the backend to get the same immediate feedback when you save, whatever the size of the codebase.
 
 ## What it grew into
 
@@ -94,10 +102,10 @@ Every deprecated package also says where to go next. The npm notices for the mer
 
 ## A Kenyan building for the world
 
-{/* CONFIRM: This whole section is your voice. Rewrite freely; the draft only uses what your portfolio already says. */}
+Much of my motivation came from developers whose tools and communities reach millions of people. Evan You created Vue and then Vite. Anthony Fu built Vitest and much of the tooling around Vue. Taylor Otwell built Laravel and the community around it. Seeing what they made showed me how far one developer's work can travel.
 
-KickJS, fcms, fordb and the Forinda RTC SDK have something in common: they are tools other developers build on. Nobody installing `@forinda/kickjs` needs to know where it was written, and that is the point.
+There are many JavaScript frameworks, but none of them ticked every box for what I wanted to achieve. Before KickJS I had thought about building an ORM, even a database engine, but those stayed ideas. The framework was the thing I actually needed.
 
-{/* CONFIRM: Your view on Kenyan and African engineers building infrastructure for the world, not only applications on top of it. */}
+I also noticed something missing. In my entire time as a developer I haven't come across a major framework built in Africa. Maybe some exist and never made the news. The closest I remember is a developer who set out to build a programming language in Swahili. I don't know how far it went, but the attempt stayed with me.
 
-Most conversations about software from Africa are about the applications built here. I want to add a different example to that picture: a Kenyan engineer designing, maintaining and making hard decisions about a production framework, including the decision to make it smaller. That work is the same wherever it is done, and it can be used anywhere.
+I want to contribute to the software ecosystem as an African, and show that Africans can build products that enterprises depend on. KickJS, fcms, fordb and the Forinda RTC SDK are my attempt at that: tools other developers build on, made by a Kenyan engineer for developers anywhere. Nobody installing `@forinda/kickjs` needs to know where it was written, and that is the point.
