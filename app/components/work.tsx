@@ -67,7 +67,7 @@ export function Work() {
               <figcaption className="border-b border-rule px-4 py-2 font-mono text-xs text-ink-muted">
                 {kickjs.codeFilename}
               </figcaption>
-              <pre className="overflow-x-auto p-4 font-mono text-[0.8125rem] leading-relaxed">
+              <pre className="overflow-x-auto p-4 font-mono text-[0.6875rem] leading-relaxed sm:text-[0.8125rem]">
                 <code>{kickjs.codeSnippet}</code>
               </pre>
             </figure>
