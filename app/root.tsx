@@ -10,6 +10,7 @@ import {
 import type { Route } from "./+types/root";
 import "./app.css";
 import { container } from "./components/section";
+import { GTAG_ID, gtagBootstrap } from "./lib/analytics";
 
 export const links: Route.LinksFunction = () => [
   { rel: "preconnect", href: "https://fonts.googleapis.com" },
@@ -35,6 +36,12 @@ export function Layout({ children }: { children: React.ReactNode }) {
             __html: `(function(){try{var t=localStorage.getItem("theme");if(t==="dark"||(!t&&window.matchMedia("(prefers-color-scheme: dark)").matches)){document.documentElement.classList.add("dark")}}catch(e){}})()`,
           }}
         />
+        {GTAG_ID && (
+          <>
+            <script dangerouslySetInnerHTML={{ __html: gtagBootstrap(GTAG_ID) }} />
+            <script async src={`https://www.googletagmanager.com/gtag/js?id=${GTAG_ID}`} />
+          </>
+        )}
         <Meta />
         <Links />
       </head>
