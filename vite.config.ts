@@ -6,6 +6,7 @@ import rehypeMdxToc from "rehype-mdx-toc";
 import rehypePrettyCode from "rehype-pretty-code";
 import rehypeSlug from "rehype-slug";
 import remarkFrontmatter from "remark-frontmatter";
+import remarkGfm from "remark-gfm";
 import remarkMdxFrontmatter from "remark-mdx-frontmatter";
 import { defineConfig } from "vite";
 
@@ -15,7 +16,8 @@ export default defineConfig({
     {
       enforce: "pre",
       ...mdx({
-        remarkPlugins: [remarkFrontmatter, [remarkMdxFrontmatter, { name: "frontmatter" }]],
+        // GFM for the tables in articles.
+        remarkPlugins: [remarkGfm, remarkFrontmatter, [remarkMdxFrontmatter, { name: "frontmatter" }]],
         rehypePlugins: [
           rehypeSlug,
           [rehypeMdxToc, { name: "toc" }],

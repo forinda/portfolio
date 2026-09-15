@@ -1,0 +1,856 @@
+---
+title: "Route flags, context decorators and typed assets in KickJS: declare it once, use it everywhere"
+summary: How route flags, context decorators and the asset manager combine into KickJS request pipelines that are declarative, typed end to end and hard to get wrong.
+published: 2026-09-15
+tags: [kickjs, nodejs, typescript, api-design]
+---
+
+Every API accumulates the same kind of glue. "This endpoint is public" gets written three times — once for auth, once for CSRF, once for rate limiting — and two of those are path strings that break the day someone renames a route. "Who is the current user" becomes `req.user as any`. "Where is the welcome email template" becomes `__dirname` arithmetic that works in dev and fails in the Docker image.
+
+[KickJS](https://kickjs.app/) has three features that remove that glue, and they are far more useful **together** than apart:
+
+| Feature | What it answers | Mental model |
+| --- | --- | --- |
+| **Route flags** | *What is true about this route?* | A fact, written once on the route, read by anything. No behaviour. |
+| **Context decorators** | *What do we know about this request?* | A typed value computed per request, before the handler runs. |
+| **Asset manager** | *Where is that file?* | A typed path to a file shipped with your code, correct in dev and in the build. |
+
+This guide explains each one, then builds a small feature set that uses all three at once: public and private routes, a signed-in user, plan-gated endpoints, per-route rate limits, and locale-aware emails and reports rendered from typed templates.
+
+> Versions: `@forinda/kickjs` 8.4+, `@forinda/kickjs-cli` 8.2+, `@forinda/kickjs-testing` 8.0+. All three features are in the core package — nothing extra to install.
+
+---
+
+## 1. Route flags: facts about a route
+
+A route flag is a **named, inheritable fact** about a route. It does nothing by itself; it records something any consumer can read.
+
+```ts
+// src/flags.ts
+import { defineRouteFlag } from '@forinda/kickjs'
+
+export const Public = defineRouteFlag('auth.public')
+export const RateLimit = defineRouteFlag<{ rpm: number }>('rate.limit')
+export const Feature = defineRouteFlag<string>('billing.feature')
+```
+
+Put flags on a controller, a method, or a module mount. The most specific declaration wins — **method > class > mount**:
+
+```ts
+@Public // every route in this controller is public…
+@Controller()
+export class DocsController {
+  @Get('/')
+  index(ctx: RequestContext) {} // public
+
+  @Public.off // …except this one
+  @Get('/drafts')
+  drafts(ctx: RequestContext) {} // not public
+}
+```
+
+Read them anywhere you hold a `RequestContext` — handlers, `@Middleware()`, guards, contributors:
+
+```ts
+ctx.route?.flags.has('auth.public') // true / false
+ctx.route?.flags.get('rate.limit') // { rpm: 10 } or undefined
+```
+
+Two rules make flags predictable:
+
+- **Removal is `.off`, never a falsy value.** A flag is either present or absent. `@Public.off` removes it; there is no "present but false" state that a presence check could misread as "public".
+- **`false` is a real value.** A flag declared with a boolean type can store `false`, and `flags.get()` returns it. Only `.off` removes.
+
+`ctx.route` is `undefined` in global middleware, which runs before a route is matched (section 8 shows how pre-routing middleware reads flags anyway).
+
+---
+
+## 2. Context decorators: typed values about a request
+
+A context decorator (also called a *contributor*) computes a value from the request and stores it on the context **before the handler runs**. It replaces middleware whose only job was "compute X and stash it on the request".
+
+Scaffold one:
+
+```bash
+kick g contributor locale --dry-run
+kick g contributor locale -o src/contributors
+```
+
+Fill it in:
+
+```ts
+// src/contributors/locale.contributor.ts
+import { defineHttpContextDecorator } from '@forinda/kickjs'
+
+// 1. Declare the key's type once, for the whole app.
+declare module '@forinda/kickjs' {
+  interface ContextMeta {
+    locale: { language: string; region: string | null }
+  }
+}
+
+// 2. Define how it's computed.
+export const ResolveLocale = defineHttpContextDecorator({
+  key: 'locale',
+  resolve: (ctx) => {
+    const header = (ctx.req.headers['accept-language'] as string | undefined) ?? 'en'
+    const [language, region] = header.split(',')[0].trim().split('-')
+    return { language: language.toLowerCase(), region: region ?? null }
+  },
+})
+```
+
+Use it:
+
+```ts
+@ResolveLocale
+@Get('/home')
+home(ctx: RequestContext) {
+  const locale = ctx.require('locale') // { language: string; region: string | null }
+}
+```
+
+What you get over hand-written middleware:
+
+| Concern | Middleware | Context decorator |
+| --- | --- | --- |
+| Type of the value | `(req as any).locale` | `ctx.require('locale')`, typed from `ContextMeta` |
+| Ordering | Array position in `bootstrap()` | `dependsOn: ['user']`, sorted at boot; cycles and missing producers **fail startup** |
+| Services | `Container.getInstance()` inside the body | `deps: { repo: REPO_TOKEN }`, resolved and typed |
+| Per-route opt-out | Fork the stack or check paths | `skipWhen` / `onlyWhen` with route flags |
+| Errors | Throw → 500 | `optional: true`, `onError` fallback, or `HttpException` |
+| Testing | Whole HTTP stack | `runContributor()` against a fake context |
+
+Registration sites, highest precedence first: **method > class > module `contributors()` > adapter/plugin `contributors()` > `bootstrap({ contributors })`**. A narrower registration of the same key silently replaces a broader one.
+
+Reading values:
+
+- `ctx.require('key')` — for values the route **must** have. Throws `MissingContextValueError` naming the key and route if the contributor didn't run. Never write `ctx.get('key')!`: it compiles even after someone deletes the decorator.
+- `ctx.get('key')` — for optional extras. Returns `T | undefined`.
+- `getRequestValue('key')` — from a **service** with no `ctx` in scope. Returns `undefined` outside a request.
+
+> Always **return** the value from `resolve()`. Assigning `ctx.locale = …` writes to one internal context object that the handler never sees.
+
+---
+
+## 3. The asset manager: typed paths to your files
+
+Templates, report layouts, JSON schemas and fixtures live next to your code in development and get copied somewhere else in the build. Without help, every call site does this:
+
+```ts
+const path =
+  process.env.NODE_ENV === 'production'
+    ? join(__dirname, '../templates/mails/welcome.ejs')
+    : join(__dirname, '../../src/templates/mails/welcome.ejs')
+```
+
+Typos compile, every call site branches on the environment, and `__dirname` breaks under ESM and bundling.
+
+### Configure
+
+Tell the CLI which directories hold assets, in `kick.config.ts`:
+
+```ts
+import { defineConfig } from '@forinda/kickjs-cli'
+
+export default defineConfig({
+  assetMap: {
+    mails: { src: 'src/templates/mails', glob: '**/*.ejs' },
+    reports: { src: 'src/templates/reports', glob: '**/*.{ejs,html}' },
+    schemas: { src: 'src/schemas', glob: '**/*.json' },
+  },
+})
+```
+
+Each entry takes `src` (required), `dest` (default `dist/<name>/`), `glob` (default `**/*`) and `keys` (`'auto'`, `'strip'` or `'with-extension'` — how file names become property names).
+
+### Generate types
+
+```bash
+kick typegen   # kick dev runs this automatically on every change
+```
+
+For a file tree like:
+
+```
+src/templates/mails/en/welcome.ejs
+src/templates/mails/fr/welcome.ejs
+src/templates/reports/monthly.ejs
+```
+
+you get a typed surface:
+
+```ts
+import { assets } from '@forinda/kickjs'
+
+assets.mails.en.welcome() // absolute path to the right file, dev or build
+assets.reports.monthly()
+assets.mails.en.welcom() // compile error
+```
+
+### Four ways to read an asset
+
+All four go through the same cached resolver:
+
+```ts
+import { assets, useAssets, Asset, resolveAsset } from '@forinda/kickjs'
+
+assets.reports.monthly() // 1. ambient proxy — the default
+
+class ReportService {
+  private assets = useAssets() // 2. as a field — easy to mock in tests
+}
+
+@Service()
+class InvoiceService {
+  @Asset('reports/invoice') // 3. declarative field, resolved on each access
+  private invoiceTemplate!: string
+}
+
+resolveAsset('mails', 'fr/welcome') // 4. dynamic — names known only at runtime; throws UnknownAssetError on a miss
+```
+
+### In the build
+
+`kick build` copies every `assetMap` entry into the output directory, writes a manifest (`.kickjs-assets.json`) and runs typegen. At runtime the resolver uses that manifest when it exists, and walks your `src` directories when it doesn't — so the same `assets.mails.en.welcome()` call works in `kick dev` and in production. After adding a template in dev, `kick build:assets` refreshes the manifest without a full rebuild.
+
+---
+
+## 4. How they fit together
+
+The three features form a natural pipeline for any request:
+
+```
+route matched
+   │
+   ├─ route flags resolved (method > class > mount)          "what is true about this route"
+   │
+   ├─ contributors run, in dependsOn order                   "what we know about this request"
+   │     • skipWhen / onlyWhen read the flags
+   │     • resolve() can read ctx.route.flags values
+   │     • guards read flags via exemptWhen
+   │
+   └─ handler / services
+         • ctx.require(...) / getRequestValue(...)
+         • assets.* picks the file, often chosen by a contributor value
+```
+
+The division of labour that keeps codebases clean:
+
+- **Flags describe** — "public", "needs the reports feature", "limit 10 rpm". Declarative, inheritable, visible in the route list.
+- **Contributors decide** — load the user, load the plan, check the feature, compute the locale. Typed, ordered, testable.
+- **Assets deliver** — the template or schema the decision points at, with a path that is always right.
+
+The recipes below build that pipeline piece by piece.
+
+---
+
+## 5. Recipe: one "public" flag, every consumer
+
+Declare the fact once:
+
+```ts
+// src/flags.ts
+export const Public = defineRouteFlag('auth.public')
+```
+
+Put it on routes:
+
+```ts
+@Public
+@Controller()
+export class AuthController {
+  @Post('/login') login(ctx: RequestContext) {}
+  @Post('/register') register(ctx: RequestContext) {}
+
+  @Public.off // the only private route here
+  @Get('/me')
+  me(ctx: RequestContext) {}
+}
+```
+
+Now **every** consumer reads that one declaration instead of its own path list:
+
+```ts
+// Auth: the user contributor steps aside on public routes (section 6).
+skipWhen: 'auth.public'
+
+// CSRF and rate limiting, as route guards:
+@Middleware(csrfGuard({ exemptWhen: 'auth.public' }))
+@Middleware(rateLimitGuard({ max: 60, exemptWhen: 'auth.public' }))
+
+// OpenAPI: public routes show no lock icon.
+SwaggerAdapter({ bearerAuth: true, publicFlag: 'auth.public' })
+
+// The built-in health probes, which you don't own:
+bootstrap({ health: { flags: ['auth.public'] } })
+```
+
+Rename a route, change the API prefix, add `/users/:id` — nothing breaks, because nothing matches on path strings. And **DevTools** shows each route's resolved flags in its Routes tab, so "why is this endpoint open?" is answered from the route list.
+
+> The framework names no flags. `auth.public` is a name you chose — pick a namespace per concern (`auth.*`, `billing.*`, `rate.*`) so readers can tell who consumes a flag.
+
+---
+
+## 6. Recipe: the signed-in user, skipped on public routes
+
+```ts
+// src/contributors/load-user.contributor.ts
+import { defineHttpContextDecorator, HttpException } from '@forinda/kickjs'
+import { SESSIONS } from '@/auth/sessions'
+
+declare module '@forinda/kickjs' {
+  interface ContextMeta {
+    user: { id: string; accountId: string; roles: string[] }
+  }
+}
+
+export const LoadUser = defineHttpContextDecorator({
+  key: 'user',
+  skipWhen: 'auth.public', // the flag from section 5
+  beforeValidation: true, // answer 401 before 422
+  deps: { sessions: SESSIONS },
+  resolve: async (ctx, { sessions }) => {
+    const user = await sessions.fromToken(ctx.headers.authorization)
+    if (!user) throw HttpException.unauthorized()
+    return user
+  },
+})
+```
+
+Register it **once**, app-wide:
+
+```ts
+bootstrap({ modules, contributors: [LoadUser.registration] })
+```
+
+Every route now requires a user, except routes flagged public. Three details matter:
+
+- **`skipWhen` makes exemption work across ownership.** Without flags, the only way to opt a route out of a contributor is to register a permissive twin under the same key — which you can't do for a contributor a plugin shipped. A flag lives on the route, so you can exempt anything.
+- **`beforeValidation: true`** moves the contributor ahead of body validation. Otherwise an anonymous request with a bad body gets a `422` listing your schema. The order becomes `beforeValidation contributors → validation → @Middleware() → other contributors → handler`. Read headers and cookies here, never the body — it isn't validated yet.
+- **A skipped contributor sets no key.** On routes that can be public, read `ctx.get('user')`; use `ctx.require('user')` only where the route is guaranteed private.
+
+Services that need the user don't take it as a parameter:
+
+```ts
+@Service()
+export class AuditService {
+  record(action: string) {
+    const user = getRequestValue('user') // typed, undefined on public routes
+    this.log.insert({ action, userId: user?.id ?? null })
+  }
+}
+```
+
+---
+
+## 7. Recipe: plan-gated routes with a flag value and dependsOn
+
+Goal: some routes require a paid feature. The route **states** which feature; contributors **enforce** it.
+
+The flag carries a value:
+
+```ts
+export const Feature = defineRouteFlag<string>('billing.feature')
+```
+
+Load the account's plan after the user:
+
+```ts
+// src/contributors/load-plan.contributor.ts
+declare module '@forinda/kickjs' {
+  interface ContextMeta {
+    plan: { name: 'free' | 'pro' | 'enterprise'; features: string[] }
+  }
+}
+
+export const LoadPlan = defineHttpContextDecorator({
+  key: 'plan',
+  dependsOn: ['user'], // runs after LoadUser; boot fails if nothing produces 'user'
+  skipWhen: 'auth.public',
+  deps: { billing: BILLING },
+  resolve: async (ctx, { billing }) => billing.planFor(ctx.require('user').accountId),
+  onError: () => ({ name: 'free', features: [] }), // billing down → treat as free, don't 500
+})
+```
+
+Enforce the feature **only where a route asks for one**:
+
+```ts
+// src/contributors/require-feature.contributor.ts
+declare module '@forinda/kickjs' {
+  interface ContextMeta {
+    feature: string
+  }
+}
+
+export const RequireFeature = defineHttpContextDecorator({
+  key: 'feature',
+  onlyWhen: 'billing.feature', // routes without the flag skip this entirely
+  dependsOn: ['plan'],
+  resolve: (ctx) => {
+    const needed = ctx.route?.flags.get('billing.feature') // the flag's value, e.g. 'reports'
+    const plan = ctx.require('plan')
+    if (!needed || !plan.features.includes(needed)) {
+      ctx.problem.forbidden({
+        type: 'https://example.com/probs/upgrade-required',
+        detail: `This needs the ${needed} feature, which is not on the ${plan.name} plan`,
+      })
+    }
+    return needed
+  },
+})
+```
+
+Register the chain app-wide:
+
+```ts
+bootstrap({
+  modules,
+  contributors: [LoadUser.registration, LoadPlan.registration, RequireFeature.registration],
+})
+```
+
+Now gating a route is one line, and it reads like documentation:
+
+```ts
+@Controller()
+export class ReportsController {
+  @Feature('reports')
+  @Get('/monthly')
+  monthly(ctx: RequestContext) {} // pro and above
+
+  @Get('/summary')
+  summary(ctx: RequestContext) {} // everyone signed in
+}
+```
+
+Why this shape works:
+
+- **Order is declared, not arranged.** `dependsOn` gives `user → plan → feature`. Forget `LoadUser` and the app refuses to start with `MissingContributorError` instead of failing on the first request.
+- **Cost is paid only where needed.** `onlyWhen` means routes without the flag never evaluate the check; a skipped contributor costs a map lookup.
+- **Errors keep their shape.** `ctx.problem.forbidden(...)` answers RFC 9457 `application/problem+json` from inside a contributor, so clients can branch on `type`.
+- **The fallback is explicit.** `onError` returns a value; the runner stores it under the key.
+
+---
+
+## 8. Recipe: per-route rate limits from one declaration
+
+A flag with a value, read by several consumers:
+
+```ts
+export const RateLimit = defineRouteFlag<{ rpm: number }>('rate.limit')
+
+@RateLimit({ rpm: 10 })
+@Post('/login')
+login(ctx: RequestContext) {}
+```
+
+**Inside the route** — a guard can exempt unmetered routes with a predicate that reads the value:
+
+```ts
+@Middleware(
+  rateLimitGuard({
+    max: 60,
+    exemptWhen: ({ flags }) => flags.get('rate.limit')?.rpm === 0,
+  }),
+)
+```
+
+**A contributor** can derive the limiter key and window from the same flag:
+
+```ts
+declare module '@forinda/kickjs' {
+  interface ContextMeta {
+    rateLimit: { key: string; rpm: number }
+  }
+}
+
+export const RateLimitKey = defineHttpContextDecorator({
+  key: 'rateLimit',
+  onlyWhen: 'rate.limit',
+  resolve: (ctx) => ({
+    key: `${ctx.get('user')?.id ?? ctx.req.ip}:${ctx.route?.path}`,
+    rpm: ctx.route?.flags.get('rate.limit')?.rpm ?? 60,
+  }),
+})
+```
+
+**Before routing** — app-wide middleware has no `ctx.route`, so it reads a policy table the app builds at boot from every mounted route's method, path and flags:
+
+```ts
+bootstrap({ middlewares: [rateLimit({ max: 60, exemptWhen: 'auth.public' })] })
+```
+
+Your own pre-routing middleware can read the same table:
+
+```ts
+import { bindRoutePolicy, type RoutePolicyTable } from '@forinda/kickjs'
+
+export function accessLog() {
+  let policy: RoutePolicyTable | undefined
+  const handler = (req, _res, next) => {
+    const flags = policy?.lookup(req.method, req.url ?? '/')
+    if (!flags?.has('audit.skip')) log.info({ method: req.method, url: req.url })
+    next()
+  }
+  return bindRoutePolicy(handler, (table) => {
+    policy = table
+  })
+}
+```
+
+A request that matches no route matches no flags, and stays limited and logged — which is exactly what you want for scanners probing random paths.
+
+### The three shapes a flag test can take
+
+Every `skipWhen`, `onlyWhen` and `exemptWhen` accepts:
+
+```ts
+'auth.public' // carries this flag
+'!auth.public' // does NOT carry it
+['auth.public', 'health.probe'] // carries ANY of these
+['!auth.public', '!health.probe'] // carries NONE of these
+({ flags, route }) => flags.has('a') && flags.has('b') // anything else
+```
+
+A list is single-polarity: `['auth.public', '!metered']` is a compile error, because "any-of" would read it as "public **or** not metered" while most people read "and". Use a predicate for mixed conditions, and keep predicates cheap — they run per request.
+
+---
+
+## 9. Recipe: flag or parameter? Choosing the right tool
+
+Contributors can also take **per-call parameters**, which overlaps with flags. The rule of thumb:
+
+- Use a **flag** when the fact is read by **several consumers**, or by tooling (OpenAPI, DevTools), or must be set on routes you don't own.
+- Use a **parameter** when it only configures **one contributor's behaviour** at that call site.
+
+A permission check is a good parameter — only one contributor cares, and the action must be named at every use:
+
+```ts
+declare module '@forinda/kickjs' {
+  interface ContextMeta {
+    permission: string
+  }
+}
+
+export const RequirePermission = defineHttpContextDecorator.withParams<{ action: string }>()({
+  key: 'permission',
+  dependsOn: ['user'],
+  // no paramDefaults.action — every route must name its own action
+  resolve: (ctx, _deps, { action }) => {
+    if (!ctx.require('user').roles.includes(action)) throw HttpException.forbidden()
+    return action
+  },
+})
+```
+
+```ts
+@RequirePermission({ action: 'reports:export' }) // ✓
+@Get('/export')
+export(ctx: RequestContext) {}
+
+@RequirePermission // ✗ compile error: `action` is required
+```
+
+Required parameters have no default on purpose: a placeholder default that one route forgets to override silently gates on the placeholder. For module, adapter or bootstrap registration, use `RequirePermission.with({ action: '…' }).registration`.
+
+Compare with `billing.feature` from section 7: that one is a **flag** because the billing contributor, the OpenAPI spec (to document "requires Pro"), and DevTools all benefit from reading it.
+
+| Need | Reach for |
+| --- | --- |
+| "This route is public / metered / exempt" | Flag |
+| "Requires feature X" (and docs should say so) | Flag with a value |
+| "Check permission `reports:export`" | Parameterised contributor |
+| "Load the tenant from a header here, a subdomain there" | Parameterised contributor |
+| Mark routes on a controller from another package | Flag on the module mount |
+
+---
+
+## 10. Recipe: locale-aware emails from typed templates
+
+Now bring in assets. Keep templates per language:
+
+```
+src/templates/mails/en/welcome.ejs
+src/templates/mails/en/password-reset.ejs
+src/templates/mails/fr/welcome.ejs
+```
+
+```ts
+// kick.config.ts
+assetMap: {
+  mails: { src: 'src/templates/mails', glob: '**/*.ejs' },
+},
+```
+
+After `kick typegen`, `assets.mails.en.welcome()` and `assets.mails['en']['password-reset']()` are typed.
+
+The **locale contributor** (section 2) decides the language per request. The **mail service** picks the matching template, falling back to English when a translation is missing:
+
+```ts
+// src/mail/mail.service.ts
+import { Service, assets, getRequestValue, resolveAsset, UnknownAssetError } from '@forinda/kickjs'
+import ejs from 'ejs'
+
+type MailName = 'welcome' | 'password-reset'
+
+@Service()
+export class MailService {
+  async render(name: MailName, data: Record<string, unknown>) {
+    const language = getRequestValue('locale')?.language ?? 'en'
+    return ejs.renderFile(this.templateFor(name, language), data)
+  }
+
+  private templateFor(name: MailName, language: string): string {
+    try {
+      return resolveAsset('mails', `${language}/${name}`) // dynamic: language is runtime data
+    } catch (error) {
+      if (error instanceof UnknownAssetError) return assets.mails.en[name]() // typed fallback
+      throw error
+    }
+  }
+}
+```
+
+Look at who does what:
+
+- **The contributor** turns a header into a typed `locale` once per request.
+- **The service** reads it with `getRequestValue` — no `ctx` threaded through three layers.
+- **The asset manager** turns `fr/welcome` into a real path in dev and in the build, and the typed `assets.mails.en[name]()` fallback means English templates are checked at compile time.
+
+Outside a request (a queue worker, a cron job) `getRequestValue` returns `undefined`, and the service falls back to English instead of throwing.
+
+---
+
+## 11. Recipe: reports rendered per route
+
+Report templates are a good fit for the `@Asset` field decorator — fixed files, injected into a service:
+
+```ts
+// kick.config.ts
+assetMap: {
+  reports: { src: 'src/templates/reports', glob: '**/*.ejs' },
+},
+```
+
+```ts
+@Service()
+export class ReportService {
+  @Asset('reports/monthly')
+  private monthlyTemplate!: string
+
+  @Asset('reports/invoice')
+  private invoiceTemplate!: string
+
+  monthly(data: MonthlyReport) {
+    return ejs.renderFile(this.monthlyTemplate, data)
+  }
+}
+```
+
+Combined with section 7, the controller carries all the policy as declarations:
+
+```ts
+@Controller()
+export class ReportsController {
+  @Autowired() private readonly reports!: ReportService
+
+  @Feature('reports') // flag: needs the reports feature
+  @RateLimit({ rpm: 5 }) // flag: expensive, limit it
+  @ResolveLocale // contributor: formats numbers and dates for the reader
+  @Get('/monthly')
+  async monthly(ctx: RequestContext) {
+    const html = await this.reports.monthly({
+      user: ctx.require('user'),
+      plan: ctx.require('plan'),
+      locale: ctx.require('locale'),
+    })
+    return ctx.html(html)
+  }
+}
+```
+
+Reading the decorators top to bottom tells you everything about the endpoint without opening a single middleware file: who can call it, how often, and what context it renders with.
+
+JSON schemas and fixtures work the same way — `assets.schemas.webhook()` gives a validator the right file in every environment.
+
+---
+
+## 12. Recipe: flagging controllers you don't own
+
+Decorators only work on code you can edit. A module can flag routes on **any** controller it mounts — including one from a package:
+
+```ts
+// src/modules/webhooks/webhooks.module.ts
+import { defineModule } from '@forinda/kickjs'
+import { StripeWebhookController } from 'some-payments-package'
+
+export const WebhooksModule = defineModule({
+  name: 'WebhooksModule',
+  build: () => ({
+    routes: () => ({
+      path: '/webhooks',
+      controller: StripeWebhookController,
+      flags: { 'auth.public': true, 'rate.limit': { rpm: 600 } },
+    }),
+  }),
+})
+```
+
+Mount flags are the lowest precedence, so a class or method declaration of the same flag still wins. A list form (`flags: ['auth.public']`) stores each flag as `true`.
+
+The same idea covers the framework's own health probes:
+
+```ts
+bootstrap({ health: { flags: ['auth.public'] } })
+```
+
+Every consumer already reading `auth.public` — `LoadUser`, the guards, the OpenAPI spec — now exempts `/health/live` and `/health/ready`, with no path strings.
+
+---
+
+## 13. Type safety: what the compiler catches
+
+`kick typegen` (automatic in `kick dev`) generates three registries into `.kickjs/types/`:
+
+| You write | Typegen generates | The compiler then catches |
+| --- | --- | --- |
+| `defineRouteFlag('rate.limit')` with a value type | `KickRouteFlags` | `skipWhen: 'auth.pubic'` → *Did you mean 'auth.public'?*; `flags.get('rate.limit')?.rpm` typed, not `unknown` |
+| `declare module … ContextMeta` | — (you write it) | `ctx.require('locale')` typed; `dependsOn: ['usr']` is an error |
+| `assetMap` in `kick.config.ts` | `KickAssets` | `assets.mails.en.welcom()` is an error |
+
+And one more that is easy to miss: **a deleted decorator becomes a compile error.** When a handler is typed with a generated route type, typegen narrows `ctx.require()` to the keys that route provably has:
+
+```ts
+@LoadTenant
+@RequirePermission({ action: 'audit:read' }) // ← delete this line…
+@Get('/audit')
+audit(ctx: Ctx<KickRoutes.AuditController['audit']>) {
+  return { perm: ctx.require('permission') } // …and this no longer compiles
+}
+```
+
+Typegen narrows only when it can prove the whole contributor set. Adapter or plugin `contributors()` can't be read statically, so projects using them skip the narrowing — `ctx.require()` still throws at runtime, which is why integration tests stay worth having.
+
+All three registries are opt-in: until you declare your first flag, `ContextMeta` key or `assetMap` entry, everything accepts plain strings and keeps compiling.
+
+---
+
+## 14. Testing all three
+
+### Contributors, in isolation
+
+`runContributor` from `@forinda/kickjs-testing` calls a contributor's `resolve()` against a fake context — no container, no HTTP. Hand it mocked `deps` and pre-seed upstream keys with `initial`:
+
+```ts
+import { describe, expect, it, vi } from 'vitest'
+import { runContributor } from '@forinda/kickjs-testing'
+import { LoadPlan } from './load-plan.contributor'
+
+describe('LoadPlan', () => {
+  it('loads the plan for the signed-in account', async () => {
+    const billing = { planFor: vi.fn(async () => ({ name: 'pro', features: ['reports'] })) }
+
+    const { value } = await runContributor(LoadPlan, {
+      deps: { billing },
+      initial: { user: { id: 'u1', accountId: 'acc-9', roles: [] } }, // what LoadUser would have set
+    })
+
+    expect(billing.planFor).toHaveBeenCalledWith('acc-9')
+    expect(value).toEqual({ name: 'pro', features: ['reports'] })
+  })
+})
+```
+
+`runContributor` calls `resolve()` directly, so `optional` and `onError` paths need the pipeline: build one with `buildPipeline([...])` and run it with `runContributors(...)` from `@forinda/kickjs`.
+
+### Flags, without a request
+
+`getRouteFlags(controllerClass, handlerName)` returns the same resolved flags a live request sees — method over class over mount:
+
+```ts
+import { getRouteFlags } from '@forinda/kickjs'
+
+it('keeps /me private while the rest of AuthController is public', () => {
+  expect(getRouteFlags(AuthController, 'login').has('auth.public')).toBe(true)
+  expect(getRouteFlags(AuthController, 'me').has('auth.public')).toBe(false)
+})
+```
+
+A test like this is cheap insurance on the one flag whose removal is a security bug.
+
+### The whole pipeline
+
+`createTestApp` from `@forinda/kickjs-testing` boots the app with real contributors, flags and ordering; drive it with Supertest and assert the outcomes: `401` without a token, `200` on a public route, `403` with the upgrade problem type on a gated route for a free plan. `createTestApp` also sets up the request scope, so services calling `getRequestValue` work in these tests.
+
+### Assets, with fixtures
+
+Point the resolver at a fixture manifest and clear its cache:
+
+```ts
+import { join } from 'node:path'
+import { clearAssetCache } from '@forinda/kickjs'
+
+beforeEach(() => {
+  process.env.KICK_ASSETS_ROOT = join(__dirname, 'fixtures/assets') // contains .kickjs-assets.json
+  clearAssetCache()
+})
+
+afterEach(() => {
+  delete process.env.KICK_ASSETS_ROOT
+  clearAssetCache()
+})
+```
+
+`@Asset` fields resolve on every access, so existing service instances pick up the fixtures without being recreated.
+
+---
+
+## 15. Pitfalls
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| A "private" route is treated as public | `@Public(false)` style thinking | Remove with `@Public.off`; flags have no false state |
+| `@Public.off` does nothing | The route never inherited the flag | Check where you expected it to come from |
+| Handler sees `undefined` for a contributor value | Assigned `ctx.x = …` in `resolve`/`onError` | **Return** the value; the runner stores it |
+| `ctx.require('user')` throws on some routes | The contributor was skipped by `skipWhen` | Use `ctx.get('user')` on routes that can be public |
+| Anonymous callers see validation errors | Auth contributor runs after validation | `beforeValidation: true` |
+| `MissingContributorError` at boot | A `dependsOn` key has no producer for that route | Register the producer at the same or broader site |
+| `beforeValidation` contributor fails boot | It depends on a normal contributor | Early contributors may only depend on early ones |
+| Flag test typo matches nothing | Flags not declared yet | Declare with `defineRouteFlag`; typegen narrows every name |
+| `['a', '!b']` won't compile | Lists are single-polarity | Use a predicate |
+| Asset works in dev, missing in production | File not matched by `glob`, or custom `build.outDir` | Widen the glob; set `build.outDir` in `kick.config.ts` |
+| Two files, one asset key | Same basename (`index.html` + `index.pug`) | Default `keys: 'auto'` keeps extensions for that group |
+| New template not found in dev | Manifest is stale | `kick build:assets` |
+| `welcome-email.ejs` needs bracket access | Non-identifier file name | `assets.mails['welcome-email']()`, or rename the file |
+
+---
+
+## The CLI commands used
+
+| Command | What it does here |
+| --- | --- |
+| `kick g contributor <name>` | Scaffolds a context decorator with its `ContextMeta` stub (`--type bare` for transport-agnostic, `--params "action:string"` for the parameterised form, `-m <module>` to place it in a module). |
+| `kick typegen` | Generates `KickRouteFlags`, route types for `ctx.require()` narrowing, and `KickAssets`. |
+| `kick dev` | Runs the app with hot reload and typegen on every change. |
+| `kick build` | Builds, copies `assetMap` files, writes the asset manifest and runs typegen. |
+| `kick build:assets` | Refreshes the asset manifest without a JS rebuild. |
+| `--dry-run` | Previews any generator's files first. |
+
+---
+
+## Recap
+
+- **Route flags** are facts on routes: declared once, inherited method > class > mount, removed with `.off`, and read by contributors, guards, pre-routing middleware, OpenAPI and DevTools.
+- **Context decorators** are typed per-request values: ordered with `dependsOn`, wired to services with `deps`, skipped per route with `skipWhen` / `onlyWhen`, run early with `beforeValidation`, parameterised with `.withParams`.
+- **The asset manager** gives typed paths to shipped files: `assetMap` in config, `assets.*` in code, correct in dev and in the build.
+- **Together:** flags describe the route, contributors decide about the request, assets deliver the file the decision points at — and typegen checks all three.
+
+---
+
+## Links
+
+- **KickJS on GitHub:** [github.com/forinda/kick-js](https://github.com/forinda/kick-js) — source, issues and discussions. A ⭐ helps others find it.
+- **Guides:** [Route flags](https://kickjs.app/guide/route-flags.html) · [Context decorators](https://kickjs.app/guide/context-decorators.html) · [Asset manager](https://kickjs.app/guide/asset-manager.html)
+- **Docs:** [kickjs.app](https://kickjs.app/)

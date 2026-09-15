@@ -1,0 +1,976 @@
+---
+title: "Realtime in KickJS: WebSockets, rooms, auth and scaling past one server"
+summary: Build authenticated, room-based realtime features in a KickJS API with @forinda/kickjs-ws, from the first socket to many servers behind a load balancer.
+published: 2026-09-15
+tags: [kickjs, nodejs, websockets, realtime]
+---
+
+Most apps reach a point where "refresh to see changes" stops being acceptable. A new chat message, a comment on a task, a notification — people expect it to appear by itself.
+
+This guide walks through building that in a [KickJS](https://www.npmjs.com/package/@forinda/kickjs) API with the official WebSocket package, `@forinda/kickjs-ws`. It starts from an empty project and ends with a setup you can run on several servers. Every step says **what** to add, **where** it goes and **why**, so you can follow it top to bottom without guessing.
+
+We will build the realtime side of a simple team chat:
+
+- people connect once when they open the app;
+- they subscribe to the rooms (chat channels) they are looking at;
+- when someone posts a message over the normal HTTP API, everyone watching that room is told;
+- a person can also get direct events (a mention, an invitation);
+- when someone is removed, their sockets are closed.
+
+> Versions used: `@forinda/kickjs` 8.4, `@forinda/kickjs-ws` 7.1, `ws` 8, Node 22. Names may differ slightly in older versions — check the package's type definitions if something does not line up.
+
+---
+
+## 1. How the pieces fit
+
+Before any code, the mental model. There are five parts:
+
+| Part | What it is | Lives in |
+| --- | --- | --- |
+| **Adapter** | `WsAdapter` — attaches a WebSocket server to KickJS's HTTP server and handles upgrades on a path such as `/ws`. | `bootstrap()` (or a plugin) |
+| **Gateway** | A class decorated with `@WsController('/chat')`. Its methods handle connect, disconnect and named messages — like an HTTP controller, but for sockets. | Your feature module |
+| **Rooms** | Named groups of sockets. You `join` a socket to `room:42`; broadcasting to `room:42` reaches every socket in it. | `RoomManager`, injected via `WS_ROOM_MANAGER` |
+| **Publisher** | Your code that says "something happened — tell room X". Usually called from an HTTP use case after a write. | A service you own |
+| **Client** | A browser `WebSocket` that connects, subscribes and reacts to events. | Your frontend |
+
+The flow for "Ada posts a message":
+
+```
+Browser (Ada)                 API                                  Browsers watching room 42
+     |  POST /messages  ------> use case saves the row
+     |                          publisher.toRoom('room:42', 'message.created', {...})
+     |                          RoomManager.broadcast(...)  ------> { event: 'message.created', data }
+     | <---- 201 Created
+```
+
+Note what is **not** there: the message is not *sent over* the socket. It is saved over plain HTTP, and the socket only carries the news that it happened. That single decision keeps validation, permissions and error handling in one place — your HTTP API — and makes the realtime layer small. We will come back to it.
+
+---
+
+## 2. Install
+
+No project yet? The KickJS CLI creates one:
+
+```bash
+npx @forinda/kickjs-cli new chat-api
+cd chat-api
+```
+
+From your KickJS API project, let the CLI add the WebSocket package **with its required dependencies**:
+
+```bash
+kick add ws        # installs @forinda/kickjs-ws and ws
+pnpm add -D @types/ws
+```
+
+`kick add` knows each optional package's peers, so you don't have to look them up. To see everything it can add — Swagger, queues, devtools, testing and more — run:
+
+```bash
+kick list --all
+```
+
+`ws` is the WebSocket server the adapter uses under the hood. (Installing by hand works too: `pnpm add @forinda/kickjs-ws ws`.)
+
+> Throughout this guide, `kick` is the project's local CLI (`pnpm exec kick …`, or through a `package.json` script).
+
+---
+
+## 3. Mount the WebSocket adapter
+
+Open the file where you call `bootstrap()` (commonly `src/index.ts`). If you keep adapters in their own folder — a good habit, the entry file stays a list of names — add it there:
+
+```ts
+// src/adapters/index.ts
+import { WsAdapter } from '@forinda/kickjs-ws'
+
+export const adapters = [
+  WsAdapter({
+    path: '/ws', // upgrade requests to /ws/... are handled
+    heartbeatInterval: 30_000, // ping clients; dead connections are dropped
+  }),
+]
+```
+
+```ts
+// src/index.ts
+import 'reflect-metadata'
+import './config'
+import { bootstrap, expressRuntime } from '@forinda/kickjs'
+import { adapters } from './adapters'
+import { modules } from './modules'
+
+export const app = await bootstrap({
+  modules,
+  adapters,
+  runtime: expressRuntime(),
+})
+```
+
+Options worth knowing now:
+
+- `path` — the base path. A gateway declared with `@WsController('/chat')` is reached at `/ws/chat`.
+- `heartbeatInterval` — ping interval in ms; `0` disables it. Keep it on: proxies and phones silently drop idle connections.
+- `maxPayload` — the largest message a client may send, in bytes. Set it; a chat event is a few hundred bytes, not megabytes.
+- `auth` — handshake authentication (section 6).
+- `broker` — relaying broadcasts to other servers (section 13).
+
+At this point the server accepts WebSocket connections on `/ws/...`, but nothing handles them.
+
+> **Prefer Socket.IO? Nothing in this guide is different.** The same package ships a Socket.IO adapter, and the gateways, decorators, handshake auth and the whole design below carry over unchanged. Install `socket.io` and swap the adapter:
+>
+> ```ts
+> import { SocketIoAdapter } from '@forinda/kickjs-ws/socket-io'
+>
+> export const adapters = [
+>   SocketIoAdapter({
+>     cors: { origin: 'http://localhost:5173' }, // any Socket.IO server option
+>     auth: {
+>       // The token arrives in the client's `auth` option rather than the subprotocol.
+>       resolveUser: async (_request, handshakeAuth) => {
+>         const claims = await verifyAccessToken(String(handshakeAuth?.token ?? ''))
+>         return claims ? { id: claims.sub, userId: claims.sub, sessionId: claims.sid } : null
+>       },
+>     },
+>   }),
+> ]
+> ```
+>
+> The same `@WsController('/chat')` class now serves the Socket.IO namespace `/chat`, and `@OnMessage('subscribe')` handles the client's `socket.emit('subscribe', data)`. Handlers receive a `SocketIoContext`, which mirrors `WsContext` (`data`, `send`, `join`, `leave`, `to`, `get`, `set`). The few things that change:
+>
+> - **Token:** the client passes it as `io('/chat', { auth: { token } })`; it reaches `resolveUser` as the second argument, `handshakeAuth`. A rejected handshake arrives on the client as a `connect_error` with the message `Unauthorized`, instead of close code `4401`.
+> - **Message format:** Socket.IO frames events itself, so there is no `{ event, data }` JSON envelope to build or parse — `socket.emit(event, data)` and `socket.on(event, handler)`.
+> - **Rooms belong to a namespace** in Socket.IO, where `ws` rooms are shared across all gateways.
+> - **Publishing from services:** inject the Socket.IO server with the `SOCKET_IO` token and call `io.of('/chat').to(room).emit(event, data)` — `WS_ROOM_MANAGER` is not registered under this adapter. Your own `RealtimeTransport` (section 9) hides that difference from the rest of the app.
+> - **Reconnection** is built into the Socket.IO client, so the hand-written backoff in section 12 is not needed (still refresh the token before it reconnects).
+> - **Several servers:** use a Socket.IO adapter such as the Redis adapter through the `adapter` option, instead of `broker` (section 13).
+
+---
+
+## 4. Your first gateway
+
+A gateway is a class. Put it next to the feature it serves. If the feature has no module yet, generate one — the CLI writes the module file and a starter controller (what else it adds depends on your project's pattern; `--dry-run` shows exactly which files):
+
+```bash
+kick g module chat --dry-run   # preview the files first
+kick g module chat
+```
+
+There is no dedicated gateway generator, so create `chat.gateway.ts` inside that module by hand:
+
+```ts
+// src/modules/chat/chat.gateway.ts
+import { Service } from '@forinda/kickjs'
+import { OnConnect, OnDisconnect, OnMessage, WsController, type WsContext } from '@forinda/kickjs-ws'
+
+@WsController('/chat')
+@Service()
+export class ChatGateway {
+  @OnConnect()
+  connect(ctx: WsContext) {
+    ctx.send('welcome', { at: new Date().toISOString() })
+  }
+
+  @OnMessage('ping')
+  ping(ctx: WsContext) {
+    ctx.send('pong', ctx.data)
+  }
+
+  @OnDisconnect()
+  disconnect(_ctx: WsContext) {
+    // Rooms are cleaned up for you when a socket closes.
+  }
+}
+```
+
+Two decorators, two jobs:
+
+- `@WsController('/chat')` tells the adapter "sockets connecting to `/ws/chat` belong to this class".
+- `@Service()` registers it in the DI container, so `@Autowired` works inside it (you will need that for database access).
+
+**Make sure the file is loaded.** Decorators run when a file is imported. If nothing imports `chat.gateway.ts`, the class never registers and connections to `/ws/chat` do nothing — no error. The simplest fix is to import it from the module file. If your project uses the Vite plugin, an eager glob in the module does it for every file at once:
+
+```ts
+// src/modules/chat/chat.module.ts
+import { defineModule } from '@forinda/kickjs'
+
+// Load every file in this module so decorated classes register.
+import.meta.glob(['./**/*.ts', '!./**/*.test.ts'], { eager: true })
+
+export const ChatModule = defineModule({
+  name: 'ChatModule',
+  build: () => ({ routes: () => [] }),
+})
+```
+
+Try it with any WebSocket client (for example `npx wscat -c ws://localhost:3000/ws/chat`). You should receive `welcome`, and sending `{"event":"ping","data":{"n":1}}` should answer `pong`.
+
+`WsContext` is what every handler receives. The members you will use most:
+
+| Member | Use |
+| --- | --- |
+| `ctx.data` | The `data` of the incoming message. **Untrusted** — validate it. |
+| `ctx.send(event, data)` | Reply to this socket only. |
+| `ctx.join(room)` / `ctx.leave(room)` | Add or remove this socket from a room. |
+| `ctx.to(room)` | Target a room from inside a handler. |
+| `ctx.broadcast(...)` | Send to the namespace, excluding the sender. |
+| `ctx.get(key)` / `ctx.set(key, value)` | Per-socket storage. The authenticated user lives under `'user'`. |
+
+---
+
+## 5. The message format
+
+Both directions use the same JSON envelope:
+
+```json
+{ "event": "subscribe", "data": { "roomId": "42" } }
+```
+
+- Client → server: `event` picks the `@OnMessage('<event>')` handler; `data` becomes `ctx.data`.
+- Server → client: `ctx.send('subscribed', { roomId: '42' })` arrives as `{ "event": "subscribed", "data": { "roomId": "42" } }`.
+
+Decide on event names early and keep them consistent. A convention that ages well: **past tense for things that happened** (`message.created`, `member.removed`) and **imperatives for requests** (`subscribe`, `unsubscribe`).
+
+---
+
+## 6. Authenticating the handshake
+
+An unauthenticated socket that can join any room is a data leak with extra steps. Authenticate **once, at connection time**, and bind the identity to the socket for its whole life.
+
+### 6.1 Where does the token go?
+
+A browser cannot set an `Authorization` header on a `WebSocket`. You have three options:
+
+1. **Query string** (`/ws/chat?token=...`) — easiest, and the worst: URLs are written to proxy and server access logs, so your token ends up in plain text in log storage.
+2. **Cookie** — works if your API and app share a site and you already use cookies; you then need CSRF-style origin checks on the upgrade.
+3. **Subprotocol** — the client passes `['bearer', token]` as the second argument to `new WebSocket(url, protocols)`, and it arrives in the `Sec-WebSocket-Protocol` header. Not logged by default, no cookies needed.
+
+This guide uses the subprotocol.
+
+### 6.2 Read and verify the token
+
+Write the identity logic as plain functions — no framework types — so they are trivial to unit test:
+
+```ts
+// src/realtime/socket-identity.ts
+import type { IncomingMessage } from 'node:http'
+import { verifyAccessToken } from '@/lib/tokens' // your existing JWT verification
+
+export interface SocketIdentity {
+  readonly id: string // required by the adapter
+  readonly userId: string
+  readonly sessionId: string
+  readonly [key: string]: unknown
+}
+
+/** `Sec-WebSocket-Protocol: bearer, <token>` → `<token>` */
+export function tokenFromHandshake(request: IncomingMessage): string | null {
+  const raw = request.headers['sec-websocket-protocol']
+  const header = Array.isArray(raw) ? raw.join(',') : raw
+  if (!header) return null
+  const parts = header.split(',').map((p) => p.trim())
+  const marker = parts.findIndex((p) => p.toLowerCase() === 'bearer')
+  return marker === -1 ? null : (parts[marker + 1] ?? null)
+}
+
+export async function resolveSocketIdentity(
+  request: IncomingMessage,
+): Promise<SocketIdentity | null> {
+  const token = tokenFromHandshake(request)
+  if (!token) return null
+  const claims = await verifyAccessToken(token) // null when invalid or expired
+  if (!claims) return null
+  return { id: claims.sub, userId: claims.sub, sessionId: claims.sid }
+}
+```
+
+Anything else a socket needs to know about its owner — a role, an account id — belongs on this identity too, decided **here** from the verified token. Never let the client state it in later messages: a client that can say "treat me as user 42" per message is choosing what it reads.
+
+### 6.3 Plug it into the adapter
+
+```ts
+WsAdapter({
+  path: '/ws',
+  auth: {
+    resolveUser: (request) => resolveSocketIdentity(request),
+    autoJoinUserRoom: true, // joins `user:<id>` automatically; see note below
+  },
+})
+```
+
+What happens now, per connection:
+
+1. The upgrade arrives; `resolveUser` runs **before** any `@OnConnect` handler.
+2. It returns `null` (or throws): the socket is accepted and immediately **closed with code `4401`**. Browsers hide a failed handshake's HTTP status from JavaScript, so a close code is the only thing your client can react to.
+3. It returns an identity: the whole object is stored on the socket as `user`, and its `id` as `userId`.
+4. Messages the client sent while `resolveUser` was still running are held and delivered after `@OnConnect` finishes (within limits: 64 messages or 1 MiB).
+
+Read the identity in handlers with `ctx.get('user')`:
+
+```ts
+private identity(ctx: WsContext): SocketIdentity | null {
+  const user = ctx.get<SocketIdentity>('user')
+  return user?.userId ? user : null
+}
+```
+
+> **Gotcha that costs hours:** read the `user` object, not per-field keys like `user:userId`. The adapter stores the whole object under `'user'`. Reading a key it never writes returns `undefined`, every handler silently returns early, and nothing errors. If "subscribe does nothing", check this first.
+
+**About `autoJoinUserRoom`:** it joins each socket to `user:<id>` so you can message a person directly, and pairs with the package's `WS_USER_BROADCASTER` helper. It is a perfectly good default. This guide turns it off and joins a user room itself (next section) only so every room name comes from one set of functions.
+
+---
+
+## 7. Rooms: subscribing and checking access
+
+### 7.1 Name rooms deliberately
+
+Room names are a **single global namespace** across all gateways. Build them with small functions rather than string literals scattered around:
+
+```ts
+// src/realtime/rooms.ts
+export const chatRoom = (roomId: string) => `room:${roomId}`
+export const userRoom = (userId: string) => `user:${userId}`
+export const sessionRoom = (sessionId: string) => `session:${sessionId}`
+```
+
+The prefix per kind (`room:`, `user:`, `session:`) means a room id and a user id can never land in the same room, however your ids are generated. And because every name comes from these functions, a typo in one place cannot quietly create a room nobody publishes to.
+
+### 7.2 Join personal rooms on connect
+
+```ts
+@OnConnect()
+connect(ctx: WsContext) {
+  const who = this.identity(ctx)
+  if (!who) return
+  ctx.join(userRoom(who.userId)) // direct events: mentions, invitations
+  ctx.join(sessionRoom(who.sessionId)) // lets you close this session's sockets later
+}
+```
+
+### 7.3 Subscribe — and check access every time
+
+The socket proves **who** someone is. It does not prove **what they may see**. Check that on every subscribe, against the same rules your HTTP API uses:
+
+```ts
+@WsController('/chat')
+@Service()
+export class ChatGateway {
+  @Autowired() private readonly rooms!: RoomAccess // your own service wrapping the DB check
+
+  /** `{ "event": "subscribe", "data": { "roomId": "…" } }` */
+  @OnMessage('subscribe')
+  async subscribe(ctx: WsContext) {
+    const who = this.identity(ctx)
+    const roomId = this.roomId(ctx)
+    if (!who || !roomId) return
+
+    if (!(await this.rooms.mayWatch(who.userId, roomId))) {
+      // Say "denied" without saying why — "exists but private" is itself a leak.
+      ctx.send('subscribe:denied', { roomId })
+      return
+    }
+    ctx.join(chatRoom(roomId))
+    ctx.send('subscribed', { roomId })
+  }
+
+  @OnMessage('unsubscribe')
+  unsubscribe(ctx: WsContext) {
+    const who = this.identity(ctx)
+    const roomId = this.roomId(ctx)
+    if (who && roomId) ctx.leave(chatRoom(roomId))
+  }
+
+  /** Never trust `ctx.data`: check the shape before using it. */
+  private roomId(ctx: WsContext): string | null {
+    const data = ctx.data as { roomId?: unknown } | undefined
+    return typeof data?.roomId === 'string' ? data.roomId : null
+  }
+}
+```
+
+Why re-check each time instead of caching access on the socket? A socket can stay open for hours. If someone loses access to a private room at 10:00, a cached "allowed" keeps them listening until they happen to reconnect. Reading it per subscribe makes a change take effect on the next subscribe; section 10 covers the ones that must take effect immediately.
+
+**A note on dependencies inside gateways.** A socket is not an HTTP request, so request-scoped services (anything resolved per request, such as a service that reads the current request's user) are not available in gateway handlers. Inject singletons, and take who is asking from the identity you stored at handshake.
+
+---
+
+## 8. Publishing from HTTP routes and services
+
+Now the other direction: something happens in your API and the right sockets should hear about it.
+
+The adapter registers a shared `RoomManager` under the `WS_ROOM_MANAGER` token. Inject it anywhere:
+
+```ts
+import { Autowired, Service } from '@forinda/kickjs'
+import { WS_ROOM_MANAGER, type RoomManager } from '@forinda/kickjs-ws'
+
+@Service()
+export class PostMessageUseCase {
+  @Autowired(WS_ROOM_MANAGER) private readonly roomManager!: RoomManager
+  // ...db, validation, etc.
+
+  async execute(roomId: string, authorId: string, body: string) {
+    const message = await this.saveMessage(roomId, authorId, body) // the write comes first
+
+    this.roomManager.broadcast(chatRoom(roomId), 'message.created', {
+      roomId,
+      messageId: message.id,
+    })
+    return message
+  }
+}
+```
+
+Three rules make this robust:
+
+1. **Publish after the write succeeds** — ideally after the transaction commits. Announcing a message that then rolls back sends clients to fetch something that does not exist.
+2. **Never let publishing fail the request.** A dropped socket must not turn a saved message into a 500. Wrap the broadcast in `try/catch` (section 9 puts that in one place).
+3. **Send hints, not replicas.** `{ roomId, messageId }` rather than the full message with author, reactions and attachments. The client refetches through your HTTP API, which applies permissions and returns the current shape. Your events stay tiny, you never leak a field you forgot to filter, and a client that missed an event recovers by fetching.
+
+Rule 3 deserves emphasis because it removes a whole class of problems. WebSocket delivery is **at most once**: a phone switching networks misses events. If events carry data, missed events mean wrong screens. If events are hints, the next fetch — on reconnect, on focus, on the next hint — fixes everything.
+
+---
+
+## 9. Put your own interface in front of the transport
+
+Injecting `RoomManager` straight into every use case works, but it spreads the package's API through your codebase and makes section 13 painful. Define the few operations your app actually needs:
+
+```ts
+// src/realtime/transport.ts
+export interface RealtimeEvent {
+  readonly type: string // 'message.created'
+  readonly payload: Record<string, unknown>
+}
+
+export interface RealtimeTransport {
+  /** Fire-and-forget: must never throw into the caller. */
+  publishToRoom(roomId: string, event: RealtimeEvent): void
+  publishToUser(userId: string, event: RealtimeEvent): void
+  disconnectUser(userId: string, reason: string): void
+  disconnectSession(sessionId: string, reason: string): void
+}
+```
+
+Implement it once over the package. `kick g service` gives you the `@Service()` class to fill in (`-m <module>` puts it inside a module instead):
+
+```bash
+kick g service kick-ws-transport --dry-run
+```
+
+```ts
+// src/realtime/kick-ws.transport.ts
+import { Autowired, Service } from '@forinda/kickjs'
+import { WS_ROOM_MANAGER, type RoomManager } from '@forinda/kickjs-ws'
+import { chatRoom, sessionRoom, userRoom } from './rooms'
+import type { RealtimeEvent, RealtimeTransport } from './transport'
+
+@Service()
+export class KickWsTransport implements RealtimeTransport {
+  @Autowired(WS_ROOM_MANAGER) private readonly rooms!: RoomManager
+
+  publishToRoom(roomId: string, event: RealtimeEvent) {
+    this.send(chatRoom(roomId), event)
+  }
+
+  publishToUser(userId: string, event: RealtimeEvent) {
+    this.send(userRoom(userId), event)
+  }
+
+  disconnectUser(userId: string, reason: string) {
+    this.closeRoom(userRoom(userId), reason)
+  }
+
+  disconnectSession(sessionId: string, reason: string) {
+    this.closeRoom(sessionRoom(sessionId), reason)
+  }
+
+  private send(room: string, event: RealtimeEvent) {
+    try {
+      this.rooms.broadcast(room, event.type, event.payload)
+    } catch {
+      // Delivery must never fail the write that caused it.
+    }
+  }
+
+  private closeRoom(room: string, reason: string) {
+    try {
+      // Copy first: leaving rooms mutates the map we are walking.
+      for (const [socketId, socket] of Array.from(this.rooms.getSockets(room) ?? new Map())) {
+        this.rooms.leaveAll(socketId)
+        socket.close(4403, reason)
+      }
+    } catch {
+      /* same rule */
+    }
+  }
+}
+```
+
+Bind it to a token of your own so callers depend on the interface:
+
+```ts
+import { createToken } from '@forinda/kickjs'
+export const REALTIME = createToken<RealtimeTransport>('app/Realtime/transport')
+```
+
+Use cases now say `@Autowired(REALTIME) private readonly realtime!: RealtimeTransport` and call `this.realtime.publishToRoom(...)`. Swapping the implementation — for tests, or for a multi-server version — becomes a one-file change.
+
+---
+
+## 10. Kicking people out
+
+Access is checked on subscribe (section 7), not on every event. That leaves a gap: someone removed from the team keeps receiving events for rooms they already joined, until they reconnect. Close it explicitly wherever access is taken away:
+
+```ts
+// in your "remove member" use case, after the removal commits
+this.realtime.disconnectUser(userId, 'membership_ended')
+
+// in your "revoke session" / "sign out everywhere" use case
+this.realtime.disconnectSession(sessionId, 'session_revoked')
+```
+
+Close codes are how the client learns what happened. WebSocket reserves `4000–4999` for applications. A small, documented set is enough:
+
+| Code | Meaning | Client should |
+| --- | --- | --- |
+| `4401` | Handshake rejected (set by the adapter) | Refresh the token, then reconnect |
+| `4403` | Access ended (set by you) | Stop reconnecting; sign out or show a message |
+| anything else | Network, deploy, server restart | Reconnect with backoff |
+
+The sessions room from section 7.2 is what makes "revoke one session" possible without disconnecting the person's other devices.
+
+---
+
+## 11. Package it as a plugin
+
+You now have an adapter, a transport, a token binding and a gateway that only work together. Registering the adapter without the binding compiles fine and fails on the first publish. A KickJS plugin keeps them as one unit.
+
+### 11.1 Generate the plugin
+
+Let the CLI write the skeleton. Plugins go to `src/plugins` by default; `-o` puts this one next to the rest of the realtime code:
+
+```bash
+kick g plugin realtime -o src/realtime --dry-run   # shows: src/realtime/realtime.plugin.ts
+kick g plugin realtime -o src/realtime
+```
+
+The generated `realtime.plugin.ts` is a `definePlugin()` call with every hook stubbed out and documented, so you can see the whole surface before deleting what you don't need. The hooks, **in the order KickJS calls them**:
+
+| Order | Hook | Use it for | In this guide |
+| --- | --- | --- | --- |
+| 1 | `adapters()` | Adapters the plugin brings; they mount before your own adapters. | `WsAdapter` |
+| 2 | `register(container)` | DI bindings that modules depend on — runs before modules load. | Bind `REALTIME` |
+| 3 | `middleware()` | Global connect-style middleware. | Delete |
+| 4 | `modules()` | Modules the plugin contributes; they load before yours. | Delete (or return a chat module) |
+| 5 | `contributors()` | Typed per-request values merged into every route. | Delete |
+| 6 | `onReady(container)` | Work after the app has fully started. | Capture the container |
+| 7 | `shutdown()` | Cleanup on shutdown **and on every hot reload**. | Close the broadcaster's connection (section 13) |
+
+It also generates a `RealtimePluginConfig` interface and `defaults`, so callers can write `RealtimePlugin({ path: '/ws' })` if you want the plugin configurable.
+
+Delete the hooks you don't use, then fill in the rest.
+
+### 11.2 Fill it in
+
+```ts
+// src/realtime/realtime.plugin.ts
+import { definePlugin, type Container } from '@forinda/kickjs'
+import { WsAdapter } from '@forinda/kickjs-ws'
+import { KickWsTransport } from './kick-ws.transport'
+import { resolveSocketIdentity } from './socket-identity'
+import { REALTIME, type RealtimeTransport } from './transport'
+
+export const RealtimePlugin = definePlugin({
+  name: 'RealtimePlugin',
+  build: () => ({
+    register(container: Container) {
+      // One transport per process.
+      let transport: RealtimeTransport | undefined
+      container.registerFactory(REALTIME, () => {
+        transport ??= container.resolve(KickWsTransport)
+        return transport
+      })
+    },
+
+    adapters: () => [
+      WsAdapter({
+        path: '/ws',
+        maxPayload: 16 * 1024,
+        auth: {
+          resolveUser: (request) => resolveSocketIdentity(request),
+          autoJoinUserRoom: false, // we join our own user and session rooms
+        },
+      }),
+    ],
+  }),
+})
+```
+
+```ts
+// src/plugins/index.ts
+import { RealtimePlugin } from '@/realtime/realtime.plugin'
+export const plugins = [RealtimePlugin()]
+```
+
+```ts
+// src/index.ts
+export const app = await bootstrap({ modules, plugins, adapters, runtime: expressRuntime() })
+```
+
+Two plugin details that trip people up:
+
+- **Ordering.** If `resolveUser` needs something another plugin binds (a database, a session store), declare `dependsOn: ['ThatPlugin']`.
+- **Timing.** `adapters()` is built early, before other plugins have registered their bindings. If `resolveUser` needs a container binding, don't resolve it while building the adapter — capture the container in `onReady(container)` and resolve lazily inside `resolveUser`, which only runs when a socket connects:
+
+```ts
+const runtime: { container: Container | null } = { container: null }
+
+// in build():
+onReady(container) { runtime.container = container },
+// in resolveUser:
+resolveUser: async (request) => {
+  const sessions = runtime.container!.resolve(SESSION_STORE) // e.g. to reject revoked sessions
+  return resolveSocketIdentity(request, sessions)
+},
+```
+
+---
+
+## 12. The browser client
+
+A client that survives real networks needs: a token in the subprotocol, resubscription after reconnect, exponential backoff, and special handling for the close codes.
+
+```ts
+// app/lib/realtime.ts
+export type Listener = (event: string, data: Record<string, unknown>) => void
+
+export interface RealtimeConnection {
+  subscribe(roomId: string): void
+  unsubscribe(roomId: string): void
+  close(): void
+}
+
+const ACCESS_ENDED = 4403
+
+export function connectRealtime(
+  getToken: (fresh: boolean) => Promise<string | null>,
+  onEvent: Listener,
+): RealtimeConnection {
+  let socket: WebSocket | null = null
+  let stopped = false
+  let attempt = 0
+  const watching = new Set<string>() // survives reconnects
+
+  const send = (event: string, data: unknown) => {
+    if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify({ event, data }))
+  }
+
+  const open = async () => {
+    // On reconnect, ask for a fresh token: the old one may have expired
+    // while the socket was up, and the handshake is the only place it's checked.
+    const token = await getToken(attempt > 0)
+    if (stopped || !token) return
+
+    const scheme = location.protocol === 'https:' ? 'wss' : 'ws'
+    const ws = new WebSocket(`${scheme}://${location.host}/ws/chat`, ['bearer', token])
+    socket = ws
+
+    ws.addEventListener('open', () => {
+      attempt = 0
+      for (const roomId of watching) send('subscribe', { roomId }) // resubscribe
+    })
+
+    ws.addEventListener('message', (message) => {
+      try {
+        const { event, data } = JSON.parse(String(message.data))
+        onEvent(event, data ?? {})
+      } catch {
+        /* ignore anything that isn't our envelope */
+      }
+    })
+
+    ws.addEventListener('close', (closed) => {
+      if (stopped) return
+      if (closed.code === ACCESS_ENDED) return onEvent('access.ended', {})
+      const delay = Math.min(30_000, 500 * 2 ** attempt++) // 0.5s, 1s, 2s … 30s
+      setTimeout(() => void open(), delay)
+    })
+  }
+
+  void open()
+
+  return {
+    subscribe(roomId) {
+      watching.add(roomId)
+      send('subscribe', { roomId })
+    },
+    unsubscribe(roomId) {
+      watching.delete(roomId)
+      send('unsubscribe', { roomId })
+    },
+    close() {
+      stopped = true
+      socket?.close()
+    },
+  }
+}
+```
+
+**One connection per tab**, created once when the signed-in part of the app mounts — not one per component. Pages call `subscribe(roomId)` when they show a room and `unsubscribe` when they leave.
+
+**Turn hints into refetches.** With TanStack Query (React, Vue, Solid, Svelte all have adapters), each event invalidates the queries it affects:
+
+```ts
+const connection = connectRealtime(getToken, (event, data) => {
+  switch (event) {
+    case 'message.created':
+      queryClient.invalidateQueries({ queryKey: ['rooms', data.roomId] })
+      break
+    case 'notification.created':
+      queryClient.invalidateQueries({ queryKey: ['notifications'] })
+      break
+    case 'access.ended':
+      queryClient.clear()
+      navigate('/login')
+      break
+  }
+})
+```
+
+Invalidation only refetches queries that are on screen, so a burst of events for a room nobody is looking at costs nothing.
+
+**Dev proxy.** If your frontend dev server proxies `/api` to the API, proxy `/ws` too, with WebSocket support on. For Vite:
+
+```ts
+server: {
+  proxy: {
+    '/api': 'http://localhost:3000',
+    '/ws': { target: 'ws://localhost:3000', ws: true },
+  },
+},
+```
+
+---
+
+## 13. Running more than one server
+
+Everything so far works on one process. Put two API instances behind a load balancer and it quietly breaks: Ada's socket is on instance A, Bob posts through instance B, and B's `RoomManager` has never heard of Ada. **Room membership lives in the memory of the process holding the socket.**
+
+You need every instance to repeat each broadcast to its own sockets. There are two good ways.
+
+### Option A: the adapter's broker (simplest)
+
+`WsAdapter` accepts a `broker`. The package ships a Redis one (`@forinda/kickjs-ws/redis`), and the `WsBroker` interface is small enough to implement over any pub/sub:
+
+```ts
+interface WsBroker {
+  publish(message: WsBrokerMessage): void | Promise<void> // called on every broadcast
+  subscribe(onMessage: (message: WsBrokerMessage) => void): void | Promise<void> // once, at startup
+  close?(): void | Promise<void>
+}
+```
+
+With a broker, `RoomManager.broadcast()` delivers to local sockets immediately and publishes; other instances deliver to theirs. Each message carries an `origin` so an instance skips its own. No other code changes.
+
+What a broker does **not** relay: `getSockets(room)` and socket closing are per process. `disconnectUser` from section 10 only closes sockets on the instance that ran it.
+
+### Option B: relay your own interface (covers disconnects too)
+
+Because your app talks to `RealtimeTransport` (section 9), you can wrap the local transport with one that announces every call — publishes *and* disconnects — to the other instances. If you already run Postgres, `LISTEN/NOTIFY` needs no new infrastructure:
+
+```ts
+// src/realtime/broadcast.transport.ts
+import { randomUUID } from 'node:crypto'
+import postgres from 'postgres'
+import type { RealtimeEvent, RealtimeTransport } from './transport'
+
+const CHANNEL = 'app_realtime'
+const MAX_PAYLOAD_BYTES = 7500 // NOTIFY payloads are capped at 8000 bytes
+
+type Operation =
+  | { op: 'room'; roomId: string; event: RealtimeEvent }
+  | { op: 'user'; userId: string; event: RealtimeEvent }
+  | { op: 'disconnectUser'; userId: string; reason: string }
+  | { op: 'disconnectSession'; sessionId: string; reason: string }
+
+export class BroadcastTransport implements RealtimeTransport {
+  private readonly instance = randomUUID() // to skip our own announcements
+  private readonly sql: postgres.Sql
+
+  constructor(private readonly local: RealtimeTransport, listenUrl: string) {
+    this.sql = postgres(listenUrl, { max: 1 })
+    void this.sql.listen(CHANNEL, (payload) => this.receive(payload))
+  }
+
+  publishToRoom(roomId: string, event: RealtimeEvent) {
+    this.local.publishToRoom(roomId, event) // this instance, now
+    this.announce({ op: 'room', roomId, event }) // every other instance
+  }
+
+  publishToUser(userId: string, event: RealtimeEvent) {
+    this.local.publishToUser(userId, event)
+    this.announce({ op: 'user', userId, event })
+  }
+
+  disconnectUser(userId: string, reason: string) {
+    this.local.disconnectUser(userId, reason)
+    this.announce({ op: 'disconnectUser', userId, reason })
+  }
+
+  disconnectSession(sessionId: string, reason: string) {
+    this.local.disconnectSession(sessionId, reason)
+    this.announce({ op: 'disconnectSession', sessionId, reason })
+  }
+
+  private announce(operation: Operation) {
+    const payload = JSON.stringify({ from: this.instance, ...operation })
+    if (Buffer.byteLength(payload) > MAX_PAYLOAD_BYTES) return // hints are tiny; log this
+    void this.sql.notify(CHANNEL, payload).catch(() => {
+      /* log; never fail the caller */
+    })
+  }
+
+  private receive(payload: string) {
+    try {
+      const message = JSON.parse(payload) as Operation & { from: string }
+      if (message.from === this.instance) return
+      switch (message.op) {
+        case 'room':
+          return this.local.publishToRoom(message.roomId, message.event)
+        case 'user':
+          return this.local.publishToUser(message.userId, message.event)
+        case 'disconnectUser':
+          return this.local.disconnectUser(message.userId, message.reason)
+        case 'disconnectSession':
+          return this.local.disconnectSession(message.sessionId, message.reason)
+      }
+    } catch {
+      /* ignore malformed payloads */
+    }
+  }
+}
+```
+
+Choose the implementation in the plugin's factory from an environment flag:
+
+```ts
+container.registerFactory(REALTIME, () => {
+  transport ??= process.env.REALTIME_BROADCAST
+    ? new BroadcastTransport(container.resolve(KickWsTransport), process.env.REALTIME_LISTEN_URL!)
+    : container.resolve(KickWsTransport)
+  return transport
+})
+```
+
+Keep the factory creating **one** transport per process — two broadcasters mean two listeners, and every event arrives twice.
+
+Things to know about `LISTEN/NOTIFY`:
+
+- **`LISTEN` holds a session.** Point `REALTIME_LISTEN_URL` straight at Postgres, not through a transaction-mode connection pooler (PgBouncer in transaction mode will silently drop your listener).
+- **At most once.** Only listeners connected at that instant hear a notification. That is fine precisely because events are hints (section 8): a missed `message.created` is repaired by the next fetch, and a missed disconnect is still enforced by your HTTP API refusing the next request.
+- **Small payloads.** 8000 bytes maximum. Hints fit easily; if one doesn't, you are sending data instead of hints.
+
+Also check your load balancer: it must support WebSocket upgrades and have an idle timeout longer than your heartbeat interval. **Sticky sessions are not required** with either option.
+
+---
+
+## 14. Testing
+
+Test the layers separately; you do not need a browser for any of it.
+
+**Pure functions** — token parsing and room names — with plain unit tests:
+
+```ts
+import { describe, expect, it } from 'vitest'
+import { tokenFromHandshake } from './socket-identity'
+
+const request = (protocol?: string) =>
+  ({ headers: protocol ? { 'sec-websocket-protocol': protocol } : {} }) as never
+
+describe('tokenFromHandshake', () => {
+  it('reads the token after the bearer marker', () => {
+    expect(tokenFromHandshake(request('bearer, abc.def'))).toBe('abc.def')
+  })
+  it('refuses a handshake without one', () => {
+    expect(tokenFromHandshake(request())).toBeNull()
+    expect(tokenFromHandshake(request('json'))).toBeNull()
+  })
+})
+```
+
+**The transport** against a fake `RoomManager` — assert which room got which event, and that a throwing `broadcast` does **not** throw out of `publishToRoom`:
+
+```ts
+it('never throws into the caller', () => {
+  const transport = new KickWsTransport()
+  Object.assign(transport, {
+    rooms: { broadcast: () => { throw new Error('socket gone') } },
+  })
+  expect(() =>
+    transport.publishToRoom('t1', 'r1', { type: 'message.created', payload: {} }),
+  ).not.toThrow()
+})
+```
+
+**Use cases** by binding `REALTIME` to a recording fake in your test container, then asserting the use case published the right hint after the write — and nothing when the write fails.
+
+**End to end** (optional): start the app on a random port, open a `ws` client with `['bearer', token]`, send `subscribe`, trigger the HTTP write, and wait for the event. Keep one or two of these; the layered tests catch almost everything faster.
+
+---
+
+## 15. Troubleshooting checklist
+
+| Symptom | Likely cause |
+| --- | --- |
+| Connection opens, handlers never run | The gateway file is never imported, so `@WsController` never registered (section 4). |
+| Socket closes immediately with `4401` | `resolveUser` returned `null`: token missing from the subprotocol, expired, or verification threw. |
+| `subscribe` does nothing, no error | Reading identity from the wrong key — use `ctx.get('user')` (section 6.3). |
+| Events reach some users but not others | Two or more instances without a broker/relay (section 13). |
+| Every event arrives twice | Two transports or two listeners created in one process (section 13). |
+| Works locally, drops after ~60 s in production | Load balancer idle timeout shorter than the heartbeat, or no WebSocket support on the proxy. |
+| Removed user still sees new events | No `disconnectUser` call when access is removed (section 10). |
+| Frontend dev server can't connect | The dev proxy is missing `ws: true` for `/ws` (section 12). |
+| A user receives events for a room they never joined | Room names built by hand without a kind prefix, so two different ids produced the same name (section 7.1). |
+
+---
+
+## Bonus: the CLI commands that helped along the way
+
+| Command | What it did for us |
+| --- | --- |
+| `kick new <name>` | Created the project. |
+| `kick add ws` | Installed the WebSocket package with its required dependencies. `kick list --all` shows everything else it can add. |
+| `kick g module chat` | Scaffolded the feature module the gateway lives in. |
+| `kick g service <name>` | Scaffolded the transport service (`-m <module>` to place it in a module). |
+| `kick g plugin realtime -o src/realtime` | Scaffolded the plugin with every lifecycle hook documented. |
+| `kick g adapter <name>` | Scaffolds your own adapter the same way, if you ever write one (default `src/adapters`). |
+| `--dry-run` / `-f` | On any generator: preview the files, or overwrite existing ones. |
+| `kick dev` | Runs the API with hot reload — which is why `shutdown()` must clean up. |
+| `kick typegen` | Regenerates the typed DI registry and route types. |
+| `kick check` / `kick doctor` | Audits the project for common problems and runs pre-flight checks. |
+| `kick explain "<error>"` | Explains a KickJS error message and suggests a fix. |
+| `kick tinker` | Opens a REPL with the DI container and your services loaded — handy for calling your transport by hand. |
+| `kick rm` | Removes generated code you no longer want. |
+
+Run `kick --help` or `kick g --list` to see the rest.
+
+---
+
+## Recap
+
+- Mount `WsAdapter`, write gateways with `@WsController`, and make sure their files load.
+- Authenticate once at the handshake — token in the subprotocol, never the query string — and bind the identity to the socket.
+- Name rooms with functions, prefix them by kind, and check access on every subscribe.
+- Save over HTTP; send small **hints** over the socket; let clients refetch.
+- Hide the package behind your own `RealtimeTransport`, and package adapter + binding + gateway as one plugin.
+- Close sockets when access ends, with close codes the client understands.
+- For more than one server, add a broker — or relay your own interface over Redis or Postgres `LISTEN/NOTIFY`.
+
+That is a realtime layer that stays small, stays correct when the network misbehaves, and scales out without a rewrite.
+
+---
+
+## Links
+
+- **KickJS on GitHub:** [github.com/forinda/kick-js](https://github.com/forinda/kick-js) — source, issues and discussions. The WebSocket package lives in the same repository. A ⭐ helps others find it.
+- **Docs:** [kickjs.app](https://kickjs.app/)
+- **WebSocket package:** [@forinda/kickjs-ws on npm](https://www.npmjs.com/package/@forinda/kickjs-ws)

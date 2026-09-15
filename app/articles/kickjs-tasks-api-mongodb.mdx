@@ -1,0 +1,990 @@
+---
+title: "Build a type-safe tasks API with KickJS and MongoDB, end to end"
+summary: A REST API with KickJS, Mongoose, Zod and JWT auth, where env, models, DI, request bodies, the current user and API docs all share one definition each.
+published: 2026-09-15
+tags: [kickjs, nodejs, mongodb, typescript]
+---
+
+Most "todo API" tutorials stop at CRUD. This one builds the parts a real API needs — sign-up and login, per-user data, validation, pagination, filtering, API docs — and keeps one rule the whole way through:
+
+> **Every concept is defined once, and every layer gets its types from that definition.**
+
+No hand-written `interface Task` that drifts from the database schema. No `req.user as any`. No request body typed by hope.
+
+We will build a task tracker with [KickJS](https://kickjs.app/) and MongoDB:
+
+- users register and log in and get a JWT;
+- each user manages their own **categories** and **tasks**;
+- tasks support filtering, sorting, search and pagination;
+- request bodies are validated, and invalid ones never reach your code;
+- Swagger docs are generated from the same schemas.
+
+**The finished code is on GitHub: [forinda/kickjs-tasks-app-with-mongodb-ts](https://github.com/forinda/kickjs-tasks-app-with-mongodb-ts).** Clone it to follow along, or build it from scratch with the steps below.
+
+> Versions used: `@forinda/kickjs` 8.4, `@forinda/kickjs-cli` 8.2, Mongoose 9, Zod 4, jose 6, Node 22+.
+
+---
+
+## 1. The type-safety map
+
+Keep this picture in mind; every section fills in one line of it.
+
+```
+Zod env schema ───────────────► getEnv('MONGO_URL')                    typed + validated at boot
+Mongoose schema ─► Model<T> ──► getModels() ─► Db ─► DbToken ─► @Inject(DbToken) db.Task.find()
+Zod DTO ─► fromZod ─► @Post({ body }) ─► kick typegen ─► Ctx<KickRoutes.X['m']> ─► ctx.body
+ContextMeta augmentation ─► LoadUser contributor ─► ctx.require('user')
+handler return value ─► kick typegen ─► typed route map + OpenAPI schema
+```
+
+The folder layout we end up with:
+
+```
+src/
+├── index.ts                     # bootstrap — exports `app`
+├── config/index.ts              # Zod env schema
+├── adapters/
+│   ├── index.ts                 # Swagger + MongoDB adapters
+│   └── mongodb.adapter.ts       # connect, register models in DI, health check
+├── contributors/
+│   └── load-user.contributor.ts # Bearer token → ctx.require('user')
+├── db/
+│   ├── index.ts                 # getModels(), duplicate-key helper
+│   └── models/                  # user, category, task schemas
+└── modules/
+    ├── index.ts                 # module registry
+    ├── auth/                    # register, login, me, token signing
+    ├── categories/
+    └── tasks/
+```
+
+---
+
+## 2. Scaffold the project
+
+Create the project with the KickJS CLI. The flags answer the prompts up front: a minimal template, Express, Zod for schemas, and the Swagger package included.
+
+```bash
+npx @forinda/kickjs-cli new todo-app --template minimal --runtime express --schema zod --packages swagger --pm pnpm
+cd todo-app
+```
+
+Add the libraries this app uses:
+
+```bash
+pnpm add mongoose jose
+```
+
+- **mongoose** — MongoDB models and queries.
+- **jose** — signing and verifying JWTs. (Passwords are hashed with Node's built-in `crypto`, no extra package.)
+
+You now have `src/index.ts`, a `src/config/index.ts`, a `kick.config.ts`, Vite with hot reload, and `kick dev` to run it.
+
+> From here on, `kick` is the project's local CLI — run it as `pnpm exec kick …` or through a `package.json` script.
+
+`src/index.ts` stays tiny. It imports the config first (so the env schema is registered before anything reads it), then passes modules and adapters by name:
+
+```ts
+// src/index.ts
+import 'reflect-metadata'
+import './config'
+import { bootstrap, expressRuntime } from '@forinda/kickjs'
+import { modules } from './modules'
+import { adapters } from './adapters'
+
+export const app = await bootstrap({ modules, runtime: expressRuntime(), adapters })
+```
+
+---
+
+## 3. A typed, validated environment
+
+Configuration bugs are the dullest outages: a typo in `MONGO_URL` that only shows up on the first request. Validate the environment at boot instead, and get types from the same schema.
+
+```ts
+// src/config/index.ts
+import { loadEnvFromSchema } from '@forinda/kickjs/config'
+import { fromZod } from '@forinda/kickjs-schema/zod'
+import { z } from 'zod'
+
+const envSchema = fromZod(
+  z.object({
+    PORT: z.coerce.number().default(3000),
+    NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+    LOG_LEVEL: z.string().default('info'),
+    MONGO_URL: z.url(),
+    DB_NAME: z.string().default('mydatabase'),
+    JWT_SECRET: z.string().min(32),
+  }),
+)
+
+// Side effect on purpose: registers the schema before anything reads config.
+export const env = loadEnvFromSchema(envSchema)
+
+export default envSchema
+```
+
+What this gives you:
+
+- **At boot**, the app refuses to start if `MONGO_URL` isn't a URL or `JWT_SECRET` is shorter than 32 characters.
+- **In code**, `getEnv('MONGO_URL')` is typed `string`, `getEnv('PORT')` is a `number`, and `getEnv('MONGO_URLL')` is a compile error. `kick typegen` (run automatically by `kick dev`) reads the default export to produce those types.
+
+Create `.env`:
+
+```bash
+PORT=3000
+MONGO_URL=mongodb://localhost:27017
+DB_NAME=todo
+JWT_SECRET=<paste the output of: openssl rand -hex 32>
+```
+
+---
+
+## 4. Mongoose models that type themselves
+
+The Mongoose schema is the single source of truth for what a document looks like. The TypeScript type is **inferred** from it with `InferSchemaType`, never written by hand.
+
+### The task model
+
+```ts
+// src/db/models/task.ts
+import mongoose, { Schema, type InferSchemaType, type Model } from 'mongoose'
+
+export const TASK_STATUSES = ['todo', 'in_progress', 'done'] as const
+export const TASK_PRIORITIES = ['low', 'medium', 'high'] as const
+
+const taskSchema = new Schema(
+  {
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    categoryId: { type: Schema.Types.ObjectId, ref: 'Category', default: null },
+    title: { type: String, required: true, trim: true },
+    description: { type: String },
+    status: { type: String, enum: TASK_STATUSES, default: 'todo' },
+    priority: { type: String, enum: TASK_PRIORITIES, default: 'medium' },
+    dueDate: { type: Date, default: null },
+  },
+  { timestamps: true, versionKey: false },
+)
+taskSchema.index({ userId: 1, status: 1 })
+
+export type Task = InferSchemaType<typeof taskSchema>
+
+// HMR-safe: reuse the compiled model on reload, otherwise OverwriteModelError.
+export const MountTaskModel = (connection: typeof mongoose) =>
+  (connection.models.Task || connection.model('Task', taskSchema)) as Model<Task>
+```
+
+Three details worth copying:
+
+1. **Enums live in `as const` arrays** (`TASK_STATUSES`). The schema imports them now; the request DTOs import them in section 8. The database and the API can never disagree about which statuses exist.
+2. **Models are created by a function**, not at import time. With hot reload, a module can be evaluated twice; calling `connection.model('Task', …)` a second time throws `OverwriteModelError`. Reusing `connection.models.Task` makes reloads safe.
+3. **Indexes match your queries.** Every task query filters by `userId`, and the list is often filtered by status.
+
+### Users and categories
+
+```ts
+// src/db/models/user.ts
+const userSchema = new Schema(
+  {
+    name: { type: String, required: true, trim: true },
+    email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    passwordHash: { type: String, required: true, select: false }, // never returned unless asked
+    role: { type: String, enum: ['user', 'admin'], default: 'user' },
+  },
+  { timestamps: true, versionKey: false },
+)
+export type User = InferSchemaType<typeof userSchema>
+export const MountUserModel = (connection: typeof mongoose) =>
+  (connection.models.User || connection.model('User', userSchema)) as Model<User>
+```
+
+```ts
+// src/db/models/category.ts
+const categorySchema = new Schema(
+  {
+    userId: { type: Schema.Types.ObjectId, ref: 'User', required: true },
+    name: { type: String, required: true, trim: true },
+    color: { type: String },
+  },
+  { timestamps: true, versionKey: false },
+)
+// Names are unique per user, not globally.
+categorySchema.index({ userId: 1, name: 1 }, { unique: true })
+
+export type Category = InferSchemaType<typeof categorySchema>
+export const MountCategoryModel = (connection: typeof mongoose) =>
+  (connection.models.Category || connection.model('Category', categorySchema)) as Model<Category>
+```
+
+`select: false` on `passwordHash` means a plain `User.find()` never includes it. You have to opt in with `.select('+passwordHash')`, which you will do in exactly one place: login.
+
+### One function collects every model
+
+```ts
+// src/db/index.ts
+import mongoose from 'mongoose'
+import { MountCategoryModel } from './models/category'
+import { MountTaskModel } from './models/task'
+import { MountUserModel } from './models/user'
+
+export const getModels = (connection: typeof mongoose) => ({
+  User: MountUserModel(connection),
+  Category: MountCategoryModel(connection),
+  Task: MountTaskModel(connection),
+})
+
+/** MongoDB's duplicate-key error code, for unique indexes. */
+export const isDuplicateKeyError = (err: unknown) =>
+  (err as { code?: number } | null)?.code === 11000
+```
+
+Its **return type** becomes the type of "the database" in every service — next section.
+
+---
+
+## 5. A MongoDB adapter that puts models into DI
+
+KickJS adapters hook into the app's lifecycle. We want one that connects before the server starts, makes the models injectable, disconnects on shutdown, and reports to the health endpoint.
+
+### Generate it
+
+```bash
+kick g adapter mongodb --dry-run   # shows: src/adapters/mongodb.adapter.ts
+kick g adapter mongodb
+```
+
+The generated file has every lifecycle hook stubbed and documented (`middleware`, `beforeMount`, `beforeStart`, `afterStart`, `shutdown`, `onHealthCheck`, …). Keep three: `beforeStart`, `shutdown` and `onHealthCheck`.
+
+### Fill it in
+
+```ts
+// src/adapters/mongodb.adapter.ts
+import { defineAdapter, createToken, Logger } from '@forinda/kickjs'
+import * as mongoose from 'mongoose'
+import { getModels } from '../db'
+
+const logger = Logger.for('MongooseAdapter')
+
+export type Db = ReturnType<typeof getModels>
+export const DbToken = createToken<Db>('app/DbModels')
+
+export interface MongodbAdapterConfig {
+  uri: string
+  dbName?: string
+}
+
+/** Hide credentials so connection strings are safe to log. */
+const redact = (uri: string) => uri.replace(/\/\/[^@/]*@/, '//***@')
+
+export const MongodbAdapter = defineAdapter<MongodbAdapterConfig>({
+  name: 'MongodbAdapter',
+  build: (config) => {
+    let client: typeof mongoose | null = null
+
+    return {
+      async beforeStart(ctx) {
+        try {
+          client = await mongoose.connect(config.uri, {
+            dbName: config.dbName,
+            // Fail boot fast instead of the 30 s default when Mongo is unreachable.
+            serverSelectionTimeoutMS: 5000,
+          })
+        } catch (error) {
+          // Fail boot: without the models registered, every request would crash instead.
+          logger.error(`Failed to connect to MongoDB at ${redact(config.uri)}`, error)
+          throw error
+        }
+        ctx.container.registerInstance(DbToken, getModels(client))
+        logger.info(`Connected to MongoDB at ${redact(config.uri)}`)
+      },
+
+      async shutdown() {
+        await client?.disconnect()
+      },
+
+      async onHealthCheck(): Promise<{ name: string; status: 'up' | 'down' }> {
+        try {
+          if (!client) return { name: 'mongodb', status: 'down' }
+          await client.connection.db?.command({ ping: 1 })
+          return { name: 'mongodb', status: 'up' }
+        } catch {
+          return { name: 'mongodb', status: 'down' }
+        }
+      },
+    }
+  },
+})
+```
+
+Walk through the decisions:
+
+- **`type Db = ReturnType<typeof getModels>`** — the injectable "database" is exactly the object `getModels` returns: `{ User: Model<User>, Category: Model<Category>, Task: Model<Task> }`. Add a model to `getModels()` and every service can use it, fully typed, with no other change.
+- **`createToken<Db>(…)`** — a typed DI token. Injecting it gives you `Db`, not `unknown`.
+- **Throw on connection failure.** An API that boots without its database answers every request with a 500. Refusing to start makes the problem obvious — in your terminal, or in your orchestrator's crash loop.
+- **`serverSelectionTimeoutMS: 5000`** — Mongoose otherwise waits 30 seconds before giving up.
+- **`redact()`** — connection strings often contain passwords; never log them raw.
+- **`shutdown()`** runs on graceful shutdown *and* on every hot reload, so dev reloads don't leak connections.
+- **`onHealthCheck()`** makes MongoDB part of the built-in readiness endpoint.
+
+### Register the adapters
+
+```ts
+// src/adapters/index.ts
+import { SwaggerAdapter } from '@forinda/kickjs-swagger'
+import { getEnv } from '@forinda/kickjs'
+import { MongodbAdapter } from './mongodb.adapter'
+
+export const adapters = [
+  SwaggerAdapter({
+    info: { title: 'Todo App API', version: '1.0.0' },
+  }),
+  MongodbAdapter({
+    uri: getEnv('MONGO_URL'),
+    dbName: getEnv('DB_NAME'),
+  }),
+]
+```
+
+Any service can now do:
+
+```ts
+@Inject(DbToken) private readonly db!: Db
+// this.db.Task.findOne(...) → typed Task document
+```
+
+---
+
+## 6. Authentication: passwords and tokens
+
+### Tokens
+
+```ts
+// src/modules/auth/auth.token.ts
+import { getEnv } from '@forinda/kickjs'
+import { SignJWT } from 'jose'
+
+export const jwtSecret = () => new TextEncoder().encode(getEnv('JWT_SECRET'))
+
+export const signToken = (userId: string) =>
+  new SignJWT()
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject(userId) // the user id lives in `sub`
+    .setIssuedAt()
+    .setExpirationTime('7d')
+    .sign(jwtSecret())
+```
+
+### Passwords
+
+Node ships `scrypt`, a deliberately slow, memory-hard hash designed for passwords. No dependency needed:
+
+```ts
+// in src/modules/auth/auth.service.ts
+import { randomBytes, scrypt, timingSafeEqual } from 'node:crypto'
+import { promisify } from 'node:util'
+
+const scryptAsync = promisify(scrypt) as (
+  password: string,
+  salt: Buffer,
+  keylen: number,
+) => Promise<Buffer>
+
+async function hashPassword(password: string) {
+  const salt = randomBytes(16) // a fresh salt per password
+  const hash = await scryptAsync(password, salt, 64)
+  return `${salt.toString('hex')}:${hash.toString('hex')}`
+}
+
+async function verifyPassword(password: string, stored: string) {
+  const [salt, hash] = stored.split(':')
+  const expected = Buffer.from(hash, 'hex')
+  const actual = await scryptAsync(password, Buffer.from(salt, 'hex'), expected.length)
+  return timingSafeEqual(actual, expected) // constant-time comparison
+}
+```
+
+`timingSafeEqual` compares in constant time, so response timing can't reveal how much of a hash matched.
+
+### Generate the module
+
+```bash
+kick g module auth --dry-run
+kick g module auth
+```
+
+With the minimal pattern this writes `src/modules/auth/auth.module.ts` and a controller. Add `auth.service.ts`, `auth.dto.ts` and `auth.token.ts` next to them (`kick g service auth -m auth` and `kick g dto register -m auth` scaffold the first two).
+
+### The auth service
+
+```ts
+// src/modules/auth/auth.service.ts
+import { HttpException, Inject, Service } from '@forinda/kickjs'
+import { DbToken, type Db } from '@/adapters/mongodb.adapter'
+import { isDuplicateKeyError } from '@/db'
+import type { LoginInput, RegisterInput } from './auth.dto'
+import { signToken } from './auth.token'
+
+@Service()
+export class AuthService {
+  @Inject(DbToken)
+  private readonly db!: Db
+
+  async register(input: RegisterInput) {
+    try {
+      const doc = await this.db.User.create({
+        name: input.name,
+        email: input.email,
+        passwordHash: await hashPassword(input.password),
+      })
+      const { passwordHash: _, ...user } = doc.toObject()
+      return { token: await signToken(String(user._id)), user }
+    } catch (err) {
+      // The unique index on email did the check — no race between "exists?" and "insert".
+      if (isDuplicateKeyError(err)) throw HttpException.conflict('Email already registered')
+      throw err
+    }
+  }
+
+  async login(input: LoginInput) {
+    const doc = await this.db.User.findOne({ email: input.email.trim().toLowerCase() })
+      .select('+passwordHash')
+      .lean()
+    // Same error for an unknown email and a wrong password: don't confirm which emails exist.
+    if (!doc || !(await verifyPassword(input.password, doc.passwordHash))) {
+      throw HttpException.unauthorized('Invalid credentials')
+    }
+    const { passwordHash: _, ...user } = doc
+    return { token: await signToken(String(user._id)), user }
+  }
+
+  async me(userId: string) {
+    const user = await this.db.User.findById(userId).lean()
+    if (!user) throw HttpException.unauthorized('User no longer exists')
+    return user
+  }
+}
+```
+
+Notice what's **not** there: no "does this email exist?" query before insert. Two sign-ups racing would both pass that check. The unique index is atomic; catching error code `11000` turns it into a clean `409`.
+
+---
+
+## 7. The current user as typed context
+
+The usual Express approach — a middleware that sets `req.user`, read later as `req.user as any` — loses types and fails silently when you forget the middleware. KickJS has **context contributors**: typed values computed per request, declared on the routes that need them.
+
+### Generate it
+
+```bash
+kick g contributor load-user --dry-run
+kick g contributor load-user -o src/contributors
+```
+
+### Fill it in
+
+```ts
+// src/contributors/load-user.contributor.ts
+import { defineHttpContextDecorator, HttpException } from '@forinda/kickjs'
+import { jwtVerify } from 'jose'
+import { jwtSecret } from '@/modules/auth/auth.token'
+
+// 1. Declare the key and its type once, for the whole app.
+declare module '@forinda/kickjs' {
+  interface ContextMeta {
+    user: { id: string }
+  }
+}
+
+// 2. Define how it's computed.
+export const LoadUser = defineHttpContextDecorator({
+  key: 'user',
+  // Answer 401 before body validation, so anonymous callers can't probe the schema.
+  beforeValidation: true,
+  resolve: async (ctx) => {
+    const header = ctx.req.headers.authorization
+    if (!header?.startsWith('Bearer ')) throw HttpException.unauthorized('Missing bearer token')
+    try {
+      const { payload } = await jwtVerify(header.slice(7), jwtSecret(), { algorithms: ['HS256'] })
+      if (!payload.sub) throw new Error('Token has no subject')
+      return { id: payload.sub }
+    } catch {
+      throw HttpException.unauthorized('Invalid or expired token')
+    }
+  },
+})
+```
+
+How it's used:
+
+- Put `@LoadUser` on a controller class (every route) or a single method.
+- Read `ctx.require('user')` in the handler. It's typed `{ id: string }` from the `ContextMeta` declaration.
+- If you forget `@LoadUser`, `ctx.require('user')` **throws** instead of returning `undefined` — the bug shows up on the first call, not as a data leak.
+
+Two security details:
+
+- **`algorithms: ['HS256']`** — pin the algorithm. Never let the token's own header decide how it's verified.
+- **`beforeValidation: true`** — without it, an anonymous request with a bad body gets a `422` listing the expected fields. With it, they get `401` and learn nothing.
+
+---
+
+## 8. Modules, DTOs and controllers
+
+### Generate the feature modules
+
+```bash
+kick g module tasks
+kick g module categories
+```
+
+Register all modules in one place:
+
+```ts
+// src/modules/index.ts
+import { defineModules } from '@forinda/kickjs'
+import { AuthModule } from './auth/auth.module'
+import { CategoriesModule } from './categories/categories.module'
+import { TasksModule } from './tasks/tasks.module'
+
+export const modules = defineModules()
+  .mount(AuthModule())
+  .mount(TasksModule())
+  .mount(CategoriesModule())
+```
+
+A module declares where its controller is mounted:
+
+```ts
+// src/modules/tasks/tasks.module.ts
+import { defineModule } from '@forinda/kickjs'
+import { TasksController } from './tasks.controller'
+
+export const TasksModule = defineModule({
+  name: 'TasksModule',
+  build: () => ({
+    routes() {
+      return { path: '/tasks', controller: TasksController }
+    },
+  }),
+})
+```
+
+> The file must be named `<name>.module.ts` — the Vite plugin uses that suffix to hot-reload modules gracefully.
+
+### DTOs: one Zod schema, three jobs
+
+Each request body is a Zod schema. The same schema **validates at runtime**, **types the handler** and **documents the endpoint**:
+
+```ts
+// src/modules/tasks/tasks.dto.ts
+import { fromZod } from '@forinda/kickjs-schema/zod'
+import { z } from 'zod'
+import { TASK_PRIORITIES, TASK_STATUSES } from '@/db/models/task'
+
+const createTaskSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  description: z.string().max(5000).optional(),
+  status: z.enum(TASK_STATUSES).optional(), // the same array the Mongoose schema uses
+  priority: z.enum(TASK_PRIORITIES).optional(),
+  dueDate: z
+    .union([z.iso.date(), z.iso.datetime({ offset: true })])
+    .nullable()
+    .optional(),
+  categoryId: z
+    .string()
+    .regex(/^[0-9a-fA-F]{24}$/, 'Invalid id')
+    .nullable()
+    .optional(),
+})
+
+const updateTaskSchema = createTaskSchema.partial()
+
+export const CreateTaskBody = fromZod(createTaskSchema)
+export const UpdateTaskBody = fromZod(updateTaskSchema)
+export type CreateTaskInput = z.infer<typeof createTaskSchema>
+export type UpdateTaskInput = z.infer<typeof updateTaskSchema>
+```
+
+> **Gotcha: dates.** Use ISO strings in DTOs, not `z.coerce.date()`. A JavaScript `Date` can't be expressed in JSON Schema, and the Swagger generator silently drops the whole body from the spec. Mongoose casts the string to a `Date` when it writes.
+
+`updateTaskSchema = createTaskSchema.partial()` — the update rules can never drift from the create rules.
+
+### Controllers: typed handlers from generated types
+
+```ts
+// src/modules/tasks/tasks.controller.ts
+import { ApiQueryParams, Autowired, Controller, Delete, Get, Patch, Post, reply, type Ctx } from '@forinda/kickjs'
+import { ApiBearerAuth, ApiTags } from '@forinda/kickjs-swagger'
+import { LoadUser } from '@/contributors/load-user.contributor'
+import { CreateTaskBody, TASK_QUERY, UpdateTaskBody } from './tasks.dto'
+import { TasksService } from './tasks.service'
+
+@ApiTags('Tasks')
+@ApiBearerAuth()
+@LoadUser // every route below needs a signed-in user
+@Controller()
+export class TasksController {
+  @Autowired() private readonly tasksService!: TasksService
+
+  @ApiQueryParams(TASK_QUERY)
+  @Get('/')
+  list(ctx: Ctx<KickRoutes.TasksController['list']>) {
+    const userId = ctx.require('user').id
+    return ctx.paginate((parsed) => this.tasksService.list(userId, parsed), TASK_QUERY)
+  }
+
+  @Post('/', { body: CreateTaskBody, name: 'CreateTaskRequest' })
+  async create(ctx: Ctx<KickRoutes.TasksController['create']>) {
+    return reply(201, await this.tasksService.create(ctx.require('user').id, ctx.body))
+  }
+
+  @Get('/:id')
+  get(ctx: Ctx<KickRoutes.TasksController['get']>) {
+    return this.tasksService.get(ctx.require('user').id, ctx.params.id)
+  }
+
+  @Patch('/:id', { body: UpdateTaskBody, name: 'UpdateTaskRequest' })
+  update(ctx: Ctx<KickRoutes.TasksController['update']>) {
+    return this.tasksService.update(ctx.require('user').id, ctx.params.id, ctx.body)
+  }
+
+  @Delete('/:id')
+  async remove(ctx: Ctx<KickRoutes.TasksController['remove']>) {
+    await this.tasksService.remove(ctx.require('user').id, ctx.params.id)
+    return reply.noContent()
+  }
+}
+```
+
+What's happening:
+
+- **`{ body: CreateTaskBody }`** attaches the schema. An invalid body gets `422` before your handler runs.
+- **`Ctx<KickRoutes.TasksController['create']>`** — `kick typegen` (automatic in `kick dev`) generates `KickRoutes` from your controllers, so `ctx.body` is `{ title: string; status?: 'todo' | 'in_progress' | 'done'; … }` and `ctx.params.id` is a `string`. Rename a field in the Zod schema and the handler stops compiling.
+- **`name: 'CreateTaskRequest'`** sets the OpenAPI component name. Give every body route a unique PascalCase name; otherwise names derive from handler names (`create`, `update`) and collide across controllers.
+- **Return values instead of `res.json()`.** Plain returns become `200` responses; `reply(201, …)` and `reply.noContent()` set other statuses. Because handlers return values, typegen can infer every route's response type too.
+
+---
+
+## 9. Services: ownership in every query
+
+The most important rule in a multi-user API: **a user can only reach their own data.** Enforce it in the query itself, not with a separate check.
+
+```ts
+// src/modules/tasks/tasks.service.ts (the single-item methods)
+import { HttpException, Inject, Service, type ParsedQuery } from '@forinda/kickjs'
+import { isValidObjectId } from 'mongoose'
+import { DbToken, type Db } from '@/adapters/mongodb.adapter'
+import type { CreateTaskInput, UpdateTaskInput } from './tasks.dto'
+
+const notFound = () => HttpException.notFound('Task not found')
+
+@Service()
+export class TasksService {
+  @Inject(DbToken)
+  private readonly db!: Db
+
+  async get(userId: string, id: string) {
+    if (!isValidObjectId(id)) throw notFound()
+    const task = await this.db.Task.findOne({ _id: id, userId }).lean()
+    if (!task) throw notFound()
+    return task
+  }
+
+  async create(userId: string, input: CreateTaskInput) {
+    await this.assertCategoryOwned(userId, input.categoryId)
+    return (await this.db.Task.create({ ...input, userId })).toObject()
+  }
+
+  async update(userId: string, id: string, input: UpdateTaskInput) {
+    if (!isValidObjectId(id)) throw notFound()
+    await this.assertCategoryOwned(userId, input.categoryId)
+    const task = await this.db.Task.findOneAndUpdate({ _id: id, userId }, input, {
+      returnDocument: 'after',
+      runValidators: true,
+    }).lean()
+    if (!task) throw notFound()
+    return task
+  }
+
+  async remove(userId: string, id: string) {
+    if (!isValidObjectId(id)) throw notFound()
+    const { deletedCount } = await this.db.Task.deleteOne({ _id: id, userId })
+    if (!deletedCount) throw notFound()
+  }
+
+  private async assertCategoryOwned(userId: string, categoryId: string | null | undefined) {
+    if (!categoryId) return
+    if (!(await this.db.Category.exists({ _id: categoryId, userId }))) {
+      throw HttpException.badRequest('Category not found')
+    }
+  }
+}
+```
+
+The patterns, and why:
+
+- **`{ _id: id, userId }` in every query.** Someone else's task simply doesn't match. There is no "load, then check the owner" step to forget.
+- **`404`, not `403`, for other users' tasks.** A `403` confirms the id exists. A `404` gives nothing away, so ids can't be probed.
+- **`isValidObjectId(id)` first.** A malformed id would otherwise throw a `CastError` and surface as a `500`; it's just "not found".
+- **`assertCategoryOwned`** — without it, a user could attach a task to *another user's* category id. References need ownership checks too.
+- **`runValidators: true`** — Mongoose skips schema validation on updates by default. Turn it on.
+- **`.lean()`** — returns plain objects instead of full Mongoose documents: faster, and they serialize to JSON cleanly.
+
+---
+
+## 10. Listing tasks: pagination, filters, sort and search
+
+KickJS parses list queries for you. Declare which fields may be filtered, sorted and searched:
+
+```ts
+// src/modules/tasks/tasks.dto.ts
+export const TASK_QUERY = {
+  filterable: ['status', 'priority', 'categoryId', 'dueDate'],
+  sortable: ['createdAt', 'updatedAt', 'dueDate'],
+  searchable: ['title', 'description'],
+}
+```
+
+In the controller (section 8), `ctx.paginate(fetcher, TASK_QUERY)` parses the query string into a `ParsedQuery` — filters, sort, search and pagination, restricted to those fields — calls your fetcher, and wraps what it returns in a standard response:
+
+```json
+{
+  "data": [ ... ],
+  "meta": { "page": 1, "limit": 20, "total": 42, "totalPages": 3, "hasNext": true, "hasPrev": false }
+}
+```
+
+`@ApiQueryParams(TASK_QUERY)` documents the same parameters in Swagger.
+
+The service translates the parsed query into MongoDB:
+
+```ts
+// src/modules/tasks/tasks.service.ts
+const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+const COMPARISON = { eq: '$eq', neq: '$ne', gt: '$gt', gte: '$gte', lt: '$lt', lte: '$lte' } as const
+
+/** Translates one `?filter=field:op:value` item into a Mongo condition. */
+function toCondition(operator: ParsedQuery['filters'][number]['operator'], raw: string) {
+  const value = raw === 'null' ? null : raw
+  switch (operator) {
+    case 'in':
+      return { $in: raw.split(',') }
+    case 'between': {
+      const [from, to] = raw.split(',')
+      return { $gte: from, $lte: to }
+    }
+    case 'contains':
+      return { $regex: escapeRegex(raw), $options: 'i' }
+    case 'starts':
+      return { $regex: `^${escapeRegex(raw)}`, $options: 'i' }
+    case 'ends':
+      return { $regex: `${escapeRegex(raw)}$`, $options: 'i' }
+    default:
+      return { [COMPARISON[operator]]: value }
+  }
+}
+
+// inside TasksService
+async list(userId: string, parsed: ParsedQuery) {
+  const filter: Record<string, any> = { userId } // ownership first, always
+  for (const { field, operator, value } of parsed.filters) {
+    filter[field] = { ...filter[field], ...toCondition(operator, value) }
+  }
+  if (parsed.search) {
+    const regex = { $regex: escapeRegex(parsed.search), $options: 'i' }
+    filter.$or = [{ title: regex }, { description: regex }]
+  }
+  const sort = parsed.sort.length
+    ? Object.fromEntries(parsed.sort.map((s) => [s.field, s.direction === 'desc' ? -1 : 1] as const))
+    : { createdAt: -1 as const }
+
+  try {
+    const [data, total] = await Promise.all([
+      this.db.Task.find(filter).sort(sort).skip(parsed.pagination.offset).limit(parsed.pagination.limit).lean(),
+      this.db.Task.countDocuments(filter),
+    ])
+    return { data, total }
+  } catch (err) {
+    // Bad filter values (e.g. dueDate:gt:tomorrow) fail Mongoose casting.
+    if ((err as Error).name === 'CastError') throw HttpException.badRequest('Invalid filter value')
+    throw err
+  }
+}
+```
+
+The details that keep this safe:
+
+- **`userId` goes in first**, and filters are merged into it — no filter can widen the query to other users.
+- **Only whitelisted fields** reach `parsed.filters` and `parsed.sort`, so nobody can filter on `passwordHash` or sort by an unindexed field.
+- **User input in a regex is escaped.** Unescaped, `?q=.*` matches everything and a crafted pattern can make the database burn CPU.
+- **`null` means null** — `?filter=categoryId:eq:null` finds uncategorized tasks.
+- **Casting errors become `400`**, not `500`.
+- **`find` and `countDocuments` run in parallel** with `Promise.all`.
+
+What clients can send:
+
+```
+GET /api/v1/tasks?filter=status:eq:done
+GET /api/v1/tasks?filter=categoryId:eq:null
+GET /api/v1/tasks?filter=dueDate:lt:2026-10-01
+GET /api/v1/tasks?sort=dueDate:asc
+GET /api/v1/tasks?q=milk
+GET /api/v1/tasks?page=2&limit=20
+```
+
+---
+
+## 11. Categories
+
+Categories follow the same shape, with two additions.
+
+**Duplicate names become `409`**, straight from the `{ userId, name }` unique index:
+
+```ts
+async create(userId: string, input: CreateCategoryInput) {
+  try {
+    return (await this.db.Category.create({ ...input, userId })).toObject()
+  } catch (err) {
+    if (isDuplicateKeyError(err)) throw HttpException.conflict('Category name already exists')
+    throw err
+  }
+}
+```
+
+**Deleting a category keeps its tasks** and just uncategorizes them:
+
+```ts
+async remove(userId: string, id: string) {
+  if (!isValidObjectId(id)) throw notFound()
+  const { deletedCount } = await this.db.Category.deleteOne({ _id: id, userId })
+  if (!deletedCount) throw notFound()
+  await this.db.Task.updateMany({ userId, categoryId: id }, { categoryId: null })
+}
+```
+
+The DTO validates colors as `#RRGGBB`:
+
+```ts
+const createCategorySchema = z.object({
+  name: z.string().trim().min(1).max(50),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/, 'Expected #RRGGBB').optional(),
+})
+```
+
+---
+
+## 12. API docs for free
+
+The Swagger adapter was registered in section 5. Because every body is a Zod schema with a `name`, every list route has `@ApiQueryParams`, and handlers return values, the spec writes itself:
+
+- **Swagger UI:** `http://localhost:3000/docs`
+- **ReDoc:** `http://localhost:3000/redoc`
+- **Raw spec:** `http://localhost:3000/openapi.json`
+
+`@ApiTags('Tasks')` groups routes; `@ApiBearerAuth()` adds the lock icon so you can paste a token and call protected routes from the browser.
+
+---
+
+## 13. Run it and try it
+
+Start MongoDB (Docker is quickest) and the API:
+
+```bash
+docker run -d --name mongo -p 27017:27017 mongo:7
+kick dev
+```
+
+The API is at `http://localhost:3000/api/v1`. Walk through the main flow with `curl`:
+
+```bash
+# Register — returns { token, user }
+curl -s -X POST http://localhost:3000/api/v1/auth/register \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Ada","email":"ada@example.com","password":"correct-horse"}'
+
+TOKEN=<paste the token>
+
+# Create a category
+curl -s -X POST http://localhost:3000/api/v1/categories \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"name":"Home","color":"#22c55e"}'
+
+# Create a task
+curl -s -X POST http://localhost:3000/api/v1/tasks \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"title":"Buy milk","priority":"high","dueDate":"2026-10-01"}'
+
+# List open tasks, soonest first
+curl -s "http://localhost:3000/api/v1/tasks?filter=status:eq:todo&sort=dueDate:asc" \
+  -H "Authorization: Bearer $TOKEN"
+```
+
+Then try the failure cases — they're the point of the design:
+
+| Try | You get |
+| --- | --- |
+| No `Authorization` header | `401` |
+| `POST /tasks` with `{"title":""}` | `422`, with the failing field |
+| Registering the same email twice | `409` |
+| Another user's task id | `404` |
+| `?filter=dueDate:gt:tomorrow` | `400` |
+
+The full API:
+
+| Method | Path | Notes |
+| --- | --- | --- |
+| `POST` | `/auth/register` | `{ name, email, password }` → `201 { token, user }` |
+| `POST` | `/auth/login` | `{ email, password }` → `{ token, user }` |
+| `GET` | `/auth/me` | Current user |
+| `GET` / `POST` | `/categories` | List / create own categories |
+| `GET` / `PATCH` / `DELETE` | `/categories/:id` | Delete leaves its tasks uncategorized |
+| `GET` / `POST` | `/tasks` | Paginated list / create |
+| `GET` / `PATCH` / `DELETE` | `/tasks/:id` | |
+
+---
+
+## 14. Where to go next
+
+- **Tests.** The project already includes Vitest, Supertest and `@forinda/kickjs-testing`. Boot the app against a throwaway database with `createTestApp({ modules })` and drive it with Supertest. The failure table above is a ready-made list of cases.
+- **A typed frontend client.** Typegen already knows every route's body and response type; `@forinda/kickjs-client` turns that into a typed fetch client, so the response type in your frontend traces back to the Mongoose schema.
+- **Refresh tokens.** Seven-day access tokens keep this example simple. For production, pair short-lived access tokens with rotating refresh tokens.
+- **Priority sorting.** `priority` is a string enum, so sorting it would be alphabetical. Add a numeric rank field if you need it.
+- **Narrower query types.** Declare `TASK_QUERY` with `as const` and the parsed filter and sort field names narrow to literal unions.
+
+### The CLI commands used
+
+| Command | What it did |
+| --- | --- |
+| `kick new todo-app --template minimal --schema zod --packages swagger` | Created the project with Zod and Swagger ready. |
+| `kick g adapter mongodb` | Scaffolded the database adapter with every lifecycle hook documented. |
+| `kick g module <name>` | Scaffolded the auth, tasks and categories modules. |
+| `kick g service <name> -m <module>` / `kick g dto <name> -m <module>` | Scaffolded services and DTOs inside a module. |
+| `kick g contributor load-user` | Scaffolded the typed current-user contributor. |
+| `--dry-run` | Previewed every generator's files before writing. |
+| `kick dev` | Ran the API with hot reload and automatic typegen. |
+| `kick typegen` / `kick typecheck` | Regenerated route and env types / type-checked. |
+| `kick add <package>` | Adds optional KickJS packages with their dependencies (`kick list --all` for the catalog). |
+
+---
+
+## Recap
+
+- **Env:** a Zod schema validates at boot and types `getEnv()`.
+- **Models:** Mongoose schemas infer their own types; enums are shared `as const` arrays; models mount HMR-safely.
+- **DI:** an adapter connects, fails fast, and registers `getModels()` behind a typed token — add a model, get it everywhere.
+- **Auth:** scrypt + constant-time comparison, JWTs with a pinned algorithm, one error for every bad login, unique indexes instead of race-prone checks.
+- **Current user:** a typed context contributor, not `req.user as any`, answering `401` before `422`.
+- **Requests:** one Zod schema validates, types the handler and documents the route.
+- **Data access:** ownership inside every query, `404` for anything that isn't yours, escaped regexes, whitelisted filters.
+- **Docs:** Swagger generated from the same definitions.
+
+One definition per concept, and the compiler checks the rest.
+
+---
+
+## Links
+
+- **This project on GitHub:** [forinda/kickjs-tasks-app-with-mongodb-ts](https://github.com/forinda/kickjs-tasks-app-with-mongodb-ts)
+- **KickJS on GitHub:** [github.com/forinda/kick-js](https://github.com/forinda/kick-js) — source, issues and discussions. A ⭐ helps others find it.
+- **Docs:** [kickjs.app](https://kickjs.app/) — see the [typegen](https://kickjs.app/guide/typegen) and [context decorators](https://kickjs.app/guide/context-decorators) guides
+- **Mongoose schema type inference:** [mongoosejs.com/docs/typescript/schemas.html](https://mongoosejs.com/docs/typescript/schemas.html)

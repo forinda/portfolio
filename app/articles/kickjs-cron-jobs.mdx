@@ -1,0 +1,660 @@
+---
+title: "Cron jobs in KickJS: scheduled work that survives restarts, reloads and multiple servers"
+summary: Run scheduled jobs in a KickJS API with the @Cron decorator and a small adapter, with no overlapping runs, exactly-once across servers, time zones and tests.
+published: 2026-09-15
+tags: [kickjs, nodejs, cron, background-jobs]
+---
+
+Every real backend grows background work: send the emails that failed, expire old sessions, retry payments, email a weekly digest, clean up rows nobody needs.
+
+[KickJS](https://www.npmjs.com/package/@forinda/kickjs) gives you a `@Cron` decorator to mark a method as scheduled. It deliberately **does not pick a scheduler for you** — you register an adapter that reads those decorators and runs them. That split is a feature: the scheduling library is one small file you own, and your jobs are ordinary services you can test like anything else.
+
+This guide builds that setup from nothing and then makes it production-ready. Each step says what to add, where, and why, so you can follow along without getting lost.
+
+By the end you will have:
+
+- jobs written as normal injectable services with `@Cron`;
+- a ~60-line `CronAdapter` that schedules them with [`croner`](https://www.npmjs.com/package/croner);
+- no overlapping runs, no crashes from a failing job, no duplicate schedules after a hot reload;
+- patterns for jobs that must run **exactly once** when you run several API instances;
+- time-zone-aware schedules;
+- unit and integration tests.
+
+> Versions used: `@forinda/kickjs` 8.4, `croner` 9, Node 22. If a name doesn't match in your version, check the package's type definitions.
+
+---
+
+## 1. How it fits together
+
+Three parts:
+
+| Part | What it does | Where it lives |
+| --- | --- | --- |
+| **`@Cron(expression, options)`** | Built into KickJS. Records "run this method on this schedule" as metadata on the class. It does **not** run anything. | On methods of your job classes |
+| **Job class** | A normal `@Service()` with injected dependencies and one or more `@Cron` methods. | `src/jobs/*.job.ts` |
+| **`CronAdapter`** | Yours. At startup, reads each job class's `@Cron` metadata with `getCronJobs()`, creates a schedule for each, and on every tick resolves the job from the DI container and calls the method. Stops everything on shutdown. | `src/adapters/cron.adapter.ts` |
+
+At runtime:
+
+```
+bootstrap()
+  └─ CronAdapter.beforeStart
+       └─ for each job class → getCronJobs(class) → new schedule per @Cron method
+
+every tick
+  └─ container.resolve(JobClass) → instance.method()   (errors caught and logged)
+
+shutdown / hot reload
+  └─ CronAdapter.shutdown → stop every schedule
+```
+
+---
+
+## 2. Install
+
+```bash
+pnpm add croner
+```
+
+No project yet? Create one with the KickJS CLI first: `npx @forinda/kickjs-cli new my-api`.
+
+> Throughout this guide, `kick` is the project's local CLI (`pnpm exec kick …`, or through a `package.json` script).
+
+`croner` is a small, dependency-free scheduler with time zone support and built-in overlap protection. Any scheduler works with the same adapter shape; this guide uses `croner`.
+
+---
+
+## 3. Cron expressions in two minutes
+
+KickJS uses the standard **5-field** format:
+
+```
+┌──────── minute       (0–59)
+│ ┌────── hour         (0–23)
+│ │ ┌──── day of month (1–31)
+│ │ │ ┌── month        (1–12)
+│ │ │ │ ┌ day of week  (0–6, Sunday = 0)
+│ │ │ │ │
+* * * * *
+```
+
+| Expression | Runs |
+| --- | --- |
+| `* * * * *` | Every minute |
+| `*/5 * * * *` | Every 5 minutes |
+| `0 * * * *` | At the start of every hour |
+| `0,30 * * * *` | On the hour and the half hour |
+| `0 3 * * *` | Every day at 03:00 |
+| `0 9 * * 1` | Mondays at 09:00 |
+| `0 0 1 * *` | Midnight on the first of each month |
+
+Two tips:
+
+- **Times are in the server's time zone** unless you pass `timezone` (section 10). Servers usually run in UTC; your laptop probably doesn't. Be explicit.
+- **Avoid the top of the hour for heavy jobs** if you can — `7 3 * * *` instead of `0 3 * * *` — so you are not competing with every other system's midnight jobs.
+
+Check an expression with an online cron explainer before shipping it.
+
+---
+
+## 4. Write your first job
+
+A job is a service, so start from the service generator. `-m` places it inside the module whose data it works on:
+
+```bash
+kick g service session-cleanup -m auth --dry-run   # shows: src/modules/auth/session-cleanup.service.ts
+kick g service session-cleanup -m auth
+```
+
+That gives you an injectable `@Service()` class. Rename or move it if you prefer all jobs in one `src/jobs/` folder — the adapter doesn't care where the file lives, only that the class is listed (section 6). Then add a `@Cron` method. It gets dependencies injected exactly like a controller or use case would:
+
+```ts
+// src/jobs/session-cleanup.job.ts
+import { Autowired, Cron, Service } from '@forinda/kickjs'
+import { SessionRepository } from '@/modules/auth/session.repository'
+
+export interface SessionCleanupRun {
+  readonly deleted: number
+}
+
+@Service()
+export class SessionCleanupJob {
+  @Autowired() private readonly sessions!: SessionRepository
+
+  @Cron('*/15 * * * *', { description: 'Delete sessions expired more than a day ago' })
+  async run(): Promise<SessionCleanupRun> {
+    const deleted = await this.sessions.deleteExpiredBefore(new Date(Date.now() - 86_400_000))
+    return { deleted }
+  }
+}
+```
+
+Details worth copying:
+
+- **`@Service()` is required.** The adapter resolves the job from the DI container on every tick; without `@Service()` there is nothing to resolve.
+- **`@Cron` options:**
+  - `description` — a human-readable label for logs and dashboards.
+  - `timezone` — an IANA name such as `'UTC'` or `'Africa/Nairobi'`.
+  - `runOnInit` — also run once immediately at startup. Useful for "catch up after a deploy"; dangerous for anything that sends messages (every restart sends again).
+- **Return a small summary** (`{ deleted }`). The scheduler ignores it, but it makes the job easy to assert on in tests and easy to log.
+- **Keep the logic in services**, and keep the job a thin trigger. The same `deleteExpiredBefore` can then be called from an admin endpoint or a script.
+
+One class can have several `@Cron` methods if they genuinely belong together; one method per class is usually clearer.
+
+---
+
+## 5. Build the CronAdapter
+
+Adapters in KickJS are created with `defineAdapter`. They get lifecycle hooks — `beforeStart` runs while the app boots, with access to the container; `shutdown` runs when the app stops.
+
+### 5.1 Generate the skeleton
+
+```bash
+kick g adapter cron --dry-run   # shows: src/adapters/cron.adapter.ts
+kick g adapter cron             # -o <dir> to write it elsewhere
+```
+
+The generated file is a `defineAdapter()` call with a `CronAdapterConfig` interface, `defaults`, and **every lifecycle hook stubbed and documented** — a quick tour of what an adapter can do:
+
+| Hook | When it runs | Keep it for cron? |
+| --- | --- | --- |
+| `middleware()` | Returns middleware mounted at named phases (`beforeGlobal`, `beforeRoutes`, …). | No — delete |
+| `beforeMount(ctx)` | Before global middleware; for routes that bypass it (health, docs). | No — delete |
+| `onRouteMount(controller, path)` | Once per controller as routes mount; for route inventories. | No — delete |
+| `beforeStart(ctx)` | After modules and routes are wired, before the server listens. `ctx.container` is ready. | **Yes — schedule jobs here** |
+| `afterStart(ctx)` | After the server is listening; `ctx.server` is the HTTP server. | No — delete |
+| `contributors()` | Typed per-request context values. | No — delete |
+| `shutdown()` | On graceful shutdown **and every hot reload**. | **Yes — stop every schedule** |
+| `onHealthCheck()` | Reports to the built-in `GET /health/ready`. | Optional — e.g. report `down` if jobs are disabled or stuck |
+
+Delete everything except `beforeStart` and `shutdown` (and `onHealthCheck` if you want it), add `services` and `enabled` to the config, and fill it in as below.
+
+### 5.2 Fill it in
+
+```ts
+// src/adapters/cron.adapter.ts
+/**
+ * Runs `@Cron`-decorated service methods on their schedules.
+ *
+ * KickJS ships the decorator and leaves the scheduler to the app; `croner` does
+ * the timing. Each job is resolved from the container on every tick, so it gets
+ * the same singletons a request would. `protect` skips a tick while the previous
+ * run is still going, and a failure is logged rather than crashing the process.
+ */
+import { createLogger, defineAdapter, getCronJobs, type Constructor } from '@forinda/kickjs'
+import { Cron as Schedule } from 'croner'
+
+const log = createLogger('Cron')
+
+export interface CronAdapterConfig {
+  readonly services: readonly Constructor[]
+  /** Off for processes that should never run jobs, like a one-off script. */
+  readonly enabled?: boolean
+}
+
+export const CronAdapter = defineAdapter<CronAdapterConfig>({
+  name: 'CronAdapter',
+  defaults: { enabled: true },
+  build(config) {
+    const scheduled: Schedule[] = []
+
+    return {
+      beforeStart(ctx) {
+        if (config.enabled === false) return
+
+        for (const service of config.services) {
+          for (const job of jobsOf(service)) {
+            const label = `${service.name}.${job.handlerName}`
+
+            const schedule = new Schedule(
+              job.expression,
+              {
+                name: label,
+                protect: true, // skip a tick while the previous run is still going
+                ...(job.timezone ? { timezone: job.timezone } : {}),
+              },
+              async () => {
+                try {
+                  const instance = ctx.container.resolve(service) as Record<string, unknown>
+                  const handler = instance[job.handlerName]
+                  if (typeof handler === 'function') await handler.call(instance)
+                } catch (error) {
+                  log.error(error, 'Scheduled job failed', { job: label })
+                }
+              },
+            )
+
+            scheduled.push(schedule)
+            if (job.runOnInit) void schedule.trigger()
+          }
+        }
+      },
+
+      /** Runs on every hot reload too, so a reload never leaves a second copy ticking. */
+      shutdown() {
+        for (const schedule of scheduled.splice(0)) schedule.stop()
+      },
+    }
+  },
+})
+
+/** The decorator writes to the prototype; read either place so neither detail leaks here. */
+export function jobsOf(service: Constructor) {
+  const onClass = getCronJobs(service)
+  return onClass.length > 0 ? onClass : getCronJobs(service.prototype)
+}
+```
+
+`getCronJobs()` returns, per decorated method, an object like:
+
+```ts
+{ expression: '*/15 * * * *', handlerName: 'run', description: '...', timezone?: string, runOnInit?: boolean }
+```
+
+That is all the adapter needs.
+
+---
+
+## 6. Register the adapter
+
+List the job classes explicitly. An explicit list is easy to read, easy to disable a job from, and means nothing runs just because a file happened to be imported.
+
+If you keep adapters in their own folder (recommended — the entry file stays a list of names):
+
+```ts
+// src/adapters/index.ts
+import { SessionCleanupJob } from '@/jobs/session-cleanup.job'
+import { WeeklyDigestJob } from '@/jobs/weekly-digest.job'
+import { CronAdapter } from './cron.adapter'
+
+export const adapters = [
+  CronAdapter({
+    services: [SessionCleanupJob, WeeklyDigestJob],
+  }),
+]
+```
+
+```ts
+// src/index.ts
+import 'reflect-metadata'
+import './config'
+import { bootstrap, expressRuntime } from '@forinda/kickjs'
+import { adapters } from './adapters'
+import { modules } from './modules'
+
+export const app = await bootstrap({
+  modules,
+  adapters,
+  runtime: expressRuntime(),
+})
+```
+
+Start the app. A job with `* * * * *` should log its first run within a minute. If nothing happens, jump to the [troubleshooting checklist](#14-troubleshooting-checklist).
+
+---
+
+## 7. What each safeguard in the adapter is for
+
+The adapter is short, but every line prevents a specific production incident.
+
+### Resolve the job on every tick
+
+```ts
+const instance = ctx.container.resolve(service)
+```
+
+Resolving inside the tick (instead of once at startup) means the job always gets the container's current singletons — database pools, mailers, config — exactly as a request would. It also plays well with hot reload in development, where bindings can be replaced.
+
+Jobs run **outside any HTTP request**. Anything request-scoped (a service that reads the current user, a database chosen from the request's host) is not available. Inject singletons and pass context explicitly.
+
+### `protect: true` — no overlapping runs
+
+A job scheduled every minute that occasionally takes three minutes would otherwise start a second and third copy on top of the first. Those copies fight over the same rows, send the same email twice, or exhaust the connection pool. With `protect`, `croner` skips a tick while the previous run is still in progress.
+
+This protects against overlap **within one process**. Across several servers, see section 9.
+
+### `try/catch` around every run
+
+An unhandled rejection in a timer callback can crash a Node process — taking your HTTP API down because a cleanup job hit a bad row. Catching and logging keeps one failing job from affecting anything else, and the next tick simply tries again.
+
+Log with a job label so you can find it: `{ job: 'SessionCleanupJob.run' }`.
+
+### `shutdown()` stops every schedule
+
+Without it:
+
+- **In development**, every hot reload creates a fresh adapter while the old timers keep ticking. After ten saves, your job runs ten times a minute.
+- **In production**, a graceful shutdown waits for timers that will never end, or a job fires while the database pool is closing.
+
+`scheduled.splice(0)` empties the array while stopping each schedule, so calling `shutdown` twice is harmless.
+
+---
+
+## 8. Designing job bodies
+
+The scheduler is the easy part. These habits make the jobs themselves safe.
+
+### Make every job safe to run twice
+
+Deploys restart processes mid-run. Timeouts retry. Someone triggers a job manually. Design for it:
+
+- **Idempotency keys.** "Weekly digest for user 42, week 2026-W37" — store it, and skip if it exists.
+- **Check before acting.** "Send reminder where `reminded_at is null`", then set `reminded_at` in the same transaction.
+- **Deletes and expiries are naturally idempotent.** Deleting already-deleted rows does nothing.
+
+### Process in batches
+
+A job that loads every row into memory works on your laptop and falls over on real data:
+
+```ts
+@Cron('*/5 * * * *', { description: 'Retry failed webhooks' })
+async run() {
+  let total = 0
+  for (;;) {
+    const batch = await this.webhooks.claimFailed(100) // at most 100 at a time
+    if (batch.length === 0) break
+    for (const hook of batch) await this.webhooks.retry(hook)
+    total += batch.length
+    if (total >= 5_000) break // leave the rest for the next tick
+  }
+  return { retried: total }
+}
+```
+
+A cap per run keeps one tick short, so `protect` rarely has to skip anything.
+
+### Keep jobs thin, logic in services
+
+```ts
+@Cron('0 * * * *', { description: 'Expire unpaid invoices' })
+async run() {
+  return await this.invoices.expireUnpaid(new Date())
+}
+```
+
+Now `expireUnpaid` is testable with a fixed date, callable from an admin action, and reused by a migration script — no scheduler involved.
+
+### Accept "now" as a parameter
+
+```ts
+async run(now = new Date()) { ... }
+```
+
+The scheduler calls `run()` with no arguments, so production uses the real time. Tests call `run(new Date('2026-09-14T07:00:00Z'))` and never have to fake timers.
+
+---
+
+## 9. Running on more than one server
+
+Scale your API to two instances and **every instance schedules every job**. Two copies of the weekly digest run at 07:00, and every customer gets two emails.
+
+Decide per job which of these it needs.
+
+### Pattern 1: fine to run everywhere — claim rows with `SKIP LOCKED`
+
+Queue-like jobs (send pending emails, retry webhooks) can run on every instance at once, as long as two instances never take the same row. Postgres does this with `FOR UPDATE SKIP LOCKED`:
+
+```ts
+// Claim up to `limit` rows nobody else holds; mark them as in progress.
+const rows = await db.execute(sql`
+  update deliveries set status = 'sending', claimed_at = now()
+  where id in (
+    select id from deliveries
+    where status in ('pending', 'failed') and attempts < 5
+    order by created_at
+    limit ${limit}
+    for update skip locked
+  )
+  returning *
+`)
+```
+
+Each instance gets a different slice of the work, and more instances simply drain the queue faster. Add a recovery rule for rows stuck in `sending` (a crash mid-send): treat `claimed_at` older than a few minutes as claimable again.
+
+### Pattern 2: exactly once — a transaction-scoped advisory lock
+
+Jobs that must run once per tick overall (a digest, a billing run, a report) take a lock first. Postgres advisory locks need no table:
+
+```ts
+const LOCK_KEY = 6_100_001 // any fixed number, unique per job
+
+@Cron('0 7 * * 1', { description: 'Weekly digest', timezone: 'UTC' })
+async run(now = new Date()) {
+  return await this.db.transaction(async (tx) => {
+    const [row] = await tx.execute(sql`select pg_try_advisory_xact_lock(${LOCK_KEY}) as locked`)
+    if (!row?.locked) return null // another instance has it this tick
+
+    // ...the actual work...
+    return { sent: 42 }
+  })
+}
+```
+
+Why this exact variant:
+
+- **`try`** — returns immediately instead of waiting. The losing instances skip the tick rather than queueing up to run it again afterwards.
+- **`xact`** — the lock is released when the transaction ends, **including when the process crashes**. A session-level lock held by a dead connection can block the job until the connection times out.
+- **Retries must still be safe** (section 8). The lock stops concurrent runs; it does not stop a run that died halfway from being followed by a complete one next tick.
+
+If the work is long, don't hold one giant transaction open for all of it. Use the lock transaction only to **claim** the run — insert a row like `job_runs(job='digest', period='2026-W37')` with a unique constraint — commit, then do the work. A duplicate insert means someone else claimed this period.
+
+Not on Postgres? The same two patterns exist elsewhere: `SELECT … FOR UPDATE SKIP LOCKED` in MySQL 8, or a Redis lock (`SET key value NX PX <ttl>`) for exactly-once.
+
+### Pattern 3: a dedicated worker
+
+At larger scale, run jobs in a separate process: the same codebase, started with jobs enabled, while API instances start with `enabled: false` (section 11). You still want patterns 1 and 2 — you will eventually run two workers during a deploy.
+
+---
+
+## 10. Time zones and "local 7am for every customer"
+
+### A fixed zone
+
+For jobs tied to one place, set the zone on the decorator:
+
+```ts
+@Cron('0 2 * * *', { description: 'Nightly export', timezone: 'Africa/Nairobi' })
+```
+
+`croner` handles daylight saving transitions for zones that have them. Without `timezone`, the schedule follows the server's zone — which differs between your laptop, CI and production. Be explicit.
+
+### Per-customer local time
+
+"Send each customer their digest at 07:00 **their** time" cannot be one cron expression, because every customer has a different 07:00. Invert it: **tick often, and decide inside the job who is due.**
+
+```ts
+@Cron('0,30 * * * *', { description: 'Digest at each customer’s local hour' })
+async run(now = new Date()) {
+  const customers = await this.customers.listSubscribed() // each has timezone, weekday, hour
+
+  const due = customers.filter((c) => {
+    const local = localWeekdayHour(now, c.timezone)
+    // Due in the first half of their local hour, so half-hour zones (UTC+5:30)
+    // still get it on the hour they chose, and the other run that hour sends nothing.
+    return local.weekday === c.digestWeekday && local.hour === c.digestHour && local.minute < 30
+  })
+
+  for (const c of due) await this.digests.sendFor(c, now)
+  return { due: due.length }
+}
+```
+
+A small helper using the built-in `Intl` API — no date library needed:
+
+```ts
+export function localWeekdayHour(at: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone,
+    weekday: 'short',
+    hour: 'numeric',
+    minute: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(at)
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
+  const weekday = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(get('weekday'))
+  return { weekday, hour: Number(get('hour')), minute: Number(get('minute')) }
+}
+```
+
+Combine it with an idempotency key per customer and period (section 8) and a lock (section 9), and a retry or a second instance can never double-send.
+
+---
+
+## 11. Turning jobs off for some processes
+
+The `enabled` option exists for processes that boot the app but must not run jobs:
+
+- one-off scripts and migrations that import `app`;
+- integration tests (you call jobs directly instead);
+- API instances when a separate worker runs the jobs.
+
+Drive it from configuration:
+
+```ts
+CronAdapter({
+  services: [SessionCleanupJob, WeeklyDigestJob],
+  enabled: process.env.RUN_JOBS !== 'false',
+})
+```
+
+When jobs are disabled, nothing is scheduled at all, so `shutdown` has nothing to stop.
+
+---
+
+## 12. Testing
+
+Test three separate things. None of them needs to wait for a real clock.
+
+### 12.1 The adapter reads your decorators
+
+```ts
+// src/adapters/cron.adapter.test.ts
+import 'reflect-metadata'
+import { Cron } from '@forinda/kickjs'
+import { describe, expect, it } from 'vitest'
+import { jobsOf } from './cron.adapter'
+
+class Sample {
+  @Cron('*/5 * * * *', { description: 'every five minutes', timezone: 'UTC' })
+  async tick() {}
+}
+
+describe('cron adapter', () => {
+  it('finds @Cron methods on a service class', () => {
+    expect(jobsOf(Sample)).toEqual([
+      expect.objectContaining({ expression: '*/5 * * * *', handlerName: 'tick', timezone: 'UTC' }),
+    ])
+  })
+})
+```
+
+This catches the silent failure where metadata is written somewhere the adapter doesn't read, so no job ever runs.
+
+### 12.2 Schedule logic as pure functions
+
+Anything with dates ("is this customer due?") belongs in a pure function with table-driven tests:
+
+```ts
+it('is due at the customer’s local hour, including half-hour zones', () => {
+  const at = new Date('2026-09-14T01:30:00Z') // Monday 07:00 in Asia/Kolkata (UTC+5:30)
+  expect(localWeekdayHour(at, 'Asia/Kolkata')).toEqual({ weekday: 1, hour: 7, minute: 0 })
+})
+```
+
+Add a daylight-saving case for a zone that has one.
+
+### 12.3 Jobs, called directly
+
+In integration tests, don't wait for the schedule — resolve the job and call it with a fixed time:
+
+```ts
+it('sends one digest per owner, and none on a retry', async () => {
+  const job = container.resolve(WeeklyDigestJob)
+  const monday7am = new Date('2026-09-14T07:00:00Z')
+
+  expect(await job.run(monday7am)).toMatchObject({ digests: 1 })
+  expect(await job.run(monday7am)).toMatchObject({ digests: 0 }) // idempotent
+})
+```
+
+To test the multi-instance lock, run two calls concurrently with `Promise.all` and assert that one returned `null`.
+
+Boot the test app with `enabled: false` (section 11) so real schedules don't fire in the middle of your tests.
+
+---
+
+## 13. Observability
+
+Scheduled work fails quietly — nobody is waiting on a response. Make it visible:
+
+- **Log a summary per run.** Wrap the handler call in the adapter: log the job label, duration and the returned summary at `info`, errors at `error`.
+
+  ```ts
+  const started = Date.now()
+  const result = await handler.call(instance)
+  log.info('Scheduled job finished', { job: label, ms: Date.now() - started, result })
+  ```
+
+- **Alert on silence, not only on errors.** A job that stopped being scheduled logs no errors. Record `last_success_at` per job (a table row, or a metric) and alert when it is older than a few intervals.
+- **Watch duration.** A job creeping from 2 s to 55 s on a one-minute schedule is about to start skipping ticks.
+- **Expose a manual trigger for admins** that calls the same service method — handy after an outage, and safe because the job is idempotent.
+
+---
+
+## 14. Troubleshooting checklist
+
+| Symptom | Likely cause |
+| --- | --- |
+| Job never runs | Class not listed in `CronAdapter({ services })`; adapter not in `bootstrap({ adapters })`; or `enabled` is false. |
+| `No provider for SomethingJob` | Missing `@Service()` on the job class, or its file is never imported. |
+| Job runs at the wrong hour | No `timezone` option and the server isn't in the zone you assumed. |
+| Job runs 2×, 3×, 10× per tick in development | `shutdown` doesn't stop schedules, so hot reloads stack timers. |
+| Job runs twice per tick in production | More than one instance, and the job has no lock or row claiming (section 9). |
+| Job "hangs" and later ticks never run | A run that never resolves (a missing `await`, a stuck query) plus `protect`. Add timeouts to external calls. |
+| One failing job crashed the API | No `try/catch` around the handler call. |
+| Request-scoped dependency is undefined inside a job | Jobs run outside requests; inject singletons and pass context explicitly. |
+| Customers in UTC+5:30 never get the local-hour job | Matching `minute === 0` only; tick every 30 minutes and match the first half of the hour (section 10). |
+
+---
+
+## Bonus: the CLI commands that helped along the way
+
+| Command | What it did for us |
+| --- | --- |
+| `kick new <name>` | Created the project. |
+| `kick g service <name> -m <module>` | Scaffolded each job class inside the module it belongs to. |
+| `kick g adapter cron` | Scaffolded the scheduler adapter with every lifecycle hook documented. |
+| `kick g plugin <name>` | Scaffolds a plugin the same way, if you later bundle the adapter with DI bindings (default `src/plugins`). |
+| `kick g test <name> -m <module>` | Scaffolds a Vitest file for a job or service. |
+| `--dry-run` / `-f` | On any generator: preview the files, or overwrite existing ones. |
+| `kick dev` | Runs the API with hot reload — which is why `shutdown()` must stop every schedule. |
+| `kick tinker` | Opens a REPL with the DI container and your services loaded — handy for resolving a job and running it once by hand. |
+| `kick typegen` | Regenerates the typed DI registry and route types. |
+| `kick check` / `kick doctor` | Audits the project for common problems and runs pre-flight checks. |
+| `kick explain "<error>"` | Explains a KickJS error message (like `No provider for …`) and suggests a fix. |
+| `kick add <package>` | Adds optional KickJS packages with their dependencies — for example `kick add queue:bullmq` when a job outgrows cron and needs a real queue. `kick list --all` shows the catalog. |
+| `kick rm` | Removes generated code you no longer want. |
+
+Run `kick --help` or `kick g --list` to see the rest.
+
+---
+
+## Recap
+
+- `@Cron` marks methods; **your** `CronAdapter` schedules them — about 60 lines with `croner`.
+- Jobs are ordinary `@Service()` classes: injected, thin, and backed by testable service methods.
+- The adapter resolves jobs per tick, prevents overlap with `protect`, catches every error, and stops all schedules on shutdown.
+- Make every job idempotent and batched; accept `now` as a parameter.
+- With several instances, choose per job: claim rows with `SKIP LOCKED`, or take a transaction-scoped advisory lock for exactly once.
+- Be explicit about time zones; for per-customer local times, tick often and decide inside the job.
+- Test the metadata, the date logic and the jobs directly — never by waiting for a clock.
+
+Scheduled work stops being "that script that sometimes runs twice" and becomes part of the application, with the same injection, logging and tests as everything else.
+
+---
+
+## Links
+
+- **KickJS on GitHub:** [github.com/forinda/kick-js](https://github.com/forinda/kick-js) — source, issues and discussions. A ⭐ helps others find it.
+- **Docs:** [kickjs.app](https://kickjs.app/)
+- **Scheduler used here:** [croner](https://www.npmjs.com/package/croner)
