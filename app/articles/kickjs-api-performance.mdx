@@ -1,0 +1,491 @@
+---
+title: "Making a KickJS API faster: measure, find the wall, then fix it"
+summary: A practical method for finding where a KickJS API actually spends its time — a 40-line load runner, three experiments that identify the bottleneck, and the fixes that follow.
+published: 2026-09-17
+tags: [kickjs, nodejs, performance, postgres]
+---
+
+"The API feels slow" is not a bug report, and "add more servers" is not a fix. Both skip the only step that matters: finding out what the machine is actually waiting on.
+
+This guide is a method. It starts with a load runner you can write in a few minutes, walks through three experiments that tell you *which* resource is the wall, and then covers the fixes that come up again and again in a [KickJS](https://www.npmjs.com/package/@forinda/kickjs) API — most of them in the per-request pipeline rather than in your business logic.
+
+The numbers quoted throughout come from a real tuning session on a multi-tenant API: a single Node process went from **350 to 800 requests per second** on the same hardware, with p50 latency dropping from 21ms to 9ms. Nothing exotic was involved — no rewrite, no new infrastructure, about 15 files touched. What made it possible was measuring before changing anything, twice being wrong about the cause, and letting the measurements say so.
+
+> Versions used: `@forinda/kickjs` 8.x, Node 22+, PostgreSQL 16+ with `postgres` (postgres.js) and Drizzle. The ideas apply to any KickJS API; the SQL specifics assume Postgres.
+
+---
+
+## 1. Measure first, and mean it
+
+Three rules before touching code.
+
+**Profile the real thing.** A dev server with hot-module reload is a different program from a production build. Always build first:
+
+```bash
+kick build
+PORT=6020 node dist/index.js
+```
+
+Interestingly, in the session above the production build performed *the same* as the dev server — around 350 rps either way. That was itself a finding: it ruled out the build pipeline and pointed at per-request work. You only learn that by measuring both.
+
+**Use a closed loop.** Two ways to generate load:
+
+| Model | How it works | Tells you |
+| --- | --- | --- |
+| **Open loop** | Fire N requests per second regardless of whether replies come back | Whether the service meets a target rate; queues grow without bound past capacity |
+| **Closed loop** | Keep exactly N requests in flight; send the next when one returns | The service's actual capacity and its latency at a given concurrency |
+
+Start closed. It cannot lie to you by piling up an unbounded queue, and the concurrency number maps to something real ("40 people clicking at once").
+
+**Record percentiles, never averages.** An average hides the tail completely. p50, p95, p99 and max, or you are guessing.
+
+---
+
+## 2. A load runner in 40 lines
+
+You do not need a tool for this. Node's `http` module with a keep-alive agent is enough, and having no dependency means it runs anywhere:
+
+```js
+// load.mjs — closed-loop runner: N workers hammer one path for D seconds.
+import http from 'node:http';
+import { readFileSync } from 'node:fs';
+
+const [, , path, conc, secs, tokenFile] = process.argv;
+const token = tokenFile ? readFileSync(tokenFile, 'utf8').trim() : null;
+const agent = new http.Agent({ keepAlive: true, maxSockets: Number(conc) });
+
+const lat = [];
+const codes = new Map();
+
+function once() {
+  return new Promise((resolve) => {
+    const t = process.hrtime.bigint();
+    const req = http.request(
+      {
+        host: '127.0.0.1',
+        port: Number(process.env.PORT ?? 3000),
+        path,
+        agent,
+        headers: token ? { authorization: `Bearer ${token}` } : {},
+      },
+      (res) => {
+        res.resume();
+        res.on('end', () => {
+          lat.push(Number(process.hrtime.bigint() - t) / 1e6);
+          codes.set(res.statusCode, (codes.get(res.statusCode) ?? 0) + 1);
+          resolve();
+        });
+      },
+    );
+    req.on('error', (e) => {
+      codes.set(e.code ?? 'ERR', (codes.get(e.code ?? 'ERR') ?? 0) + 1);
+      resolve();
+    });
+    req.end();
+  });
+}
+
+const until = Date.now() + Number(secs) * 1000;
+const start = Date.now();
+await Promise.all(
+  Array.from({ length: Number(conc) }, async () => {
+    while (Date.now() < until) await once();
+  }),
+);
+
+const elapsed = (Date.now() - start) / 1000;
+lat.sort((a, b) => a - b);
+const q = (p) => lat[Math.min(lat.length - 1, Math.floor((p / 100) * lat.length))] ?? 0;
+console.log(
+  JSON.stringify({
+    path,
+    conc: Number(conc),
+    rps: +(lat.length / elapsed).toFixed(1),
+    p50: +q(50).toFixed(1),
+    p95: +q(95).toFixed(1),
+    p99: +q(99).toFixed(1),
+    max: +(lat.at(-1) ?? 0).toFixed(1),
+    codes: Object.fromEntries(codes),
+  }),
+);
+```
+
+Three details that matter more than they look:
+
+- **`keepAlive: true`.** Without it you measure TCP handshakes, not your API. This alone can halve the numbers you see.
+- **`res.resume()`.** You must drain the response body or Node stalls the socket. Forget it and everything looks mysteriously slow.
+- **`maxSockets` equal to the concurrency.** Otherwise the agent queues requests inside the client and your "concurrency 64" is really concurrency 5.
+
+Run a warm-up first and discard it — the first few hundred requests pay for JIT compilation and lazy connection setup:
+
+```bash
+PORT=6020 node load.mjs "/api/v1/projects?limit=20" 8 5 token.txt > /dev/null   # warm-up
+for c in 1 8 16 32 64; do PORT=6020 node load.mjs "/api/v1/projects?limit=20" $c 10 token.txt; done
+```
+
+---
+
+## 3. Getting past authentication
+
+Almost every interesting endpoint requires a token, so you need one that the API will accept. Do not script a browser login. Mint a token exactly the way your login code does, with the same secret, issuer and audience from your environment:
+
+```js
+// mint.mjs — a token identical to what the login route issues.
+import { readFileSync } from 'node:fs';
+import { SignJWT } from 'jose';
+
+const env = Object.fromEntries(
+  readFileSync('.env', 'utf8')
+    .split('\n')
+    .filter((l) => l.includes('=') && !l.trim().startsWith('#'))
+    .map((l) => [l.slice(0, l.indexOf('=')).trim(), l.slice(l.indexOf('=') + 1).trim()]),
+);
+
+const token = await new SignJWT({ kind: 'user', org_id: process.argv[3] })
+  .setProtectedHeader({ alg: 'HS256', typ: 'JWT' })
+  .setIssuer(env.JWT_ISSUER)
+  .setAudience(env.JWT_AUDIENCE)
+  .setIssuedAt()
+  .setExpirationTime('3600s')
+  .setSubject(process.argv[2])
+  .setJti(crypto.randomUUID())
+  .sign(new TextEncoder().encode(env.JWT_SECRET));
+
+console.log(token);
+```
+
+Two traps worth naming, because both cost me time:
+
+- **Path aliases.** If your project maps `@/…` in `tsconfig`, a script living outside the app directory will not resolve those imports. Either put the script inside the app, or — better — avoid importing app code at all and sign with `jose` directly, as above. Fewer moving parts.
+- **Expiry.** A one-hour token quietly becomes `401` mid-session, and a benchmark run full of 401s looks *wonderful*: 2,300 rps with a 2ms p50. If your throughput suddenly triples, check the status codes before celebrating. This is exactly why the runner above reports a `codes` histogram.
+
+---
+
+## 4. Read the shape of the curve
+
+Run the concurrency ramp and look at the shape, not the individual numbers:
+
+| conc | rps | p50 | p95 |
+| --- | --- | --- | --- |
+| 1 | 137 | 6.6 | 12.4 |
+| 8 | 354 | 21.2 | 30.1 |
+| 16 | 291 | 52.2 | 77.5 |
+| 32 | 352 | 89.6 | 112.1 |
+| 64 | 357 | 175.6 | 216.2 |
+
+Throughput is flat from concurrency 8 onward while latency grows almost exactly linearly. That is the signature of a **saturated resource**: every extra concurrent request just waits in line. Doubling concurrency doubles latency and adds no throughput.
+
+The useful reading is not "350 rps" — it is "saturated at concurrency 8". Something in the request path serialises, and the ramp tells you *that* without telling you *what*.
+
+Two other shapes worth recognising:
+
+- **Throughput climbs then falls** as concurrency rises: contention (lock convoys, context switching, GC pressure). More load makes it actively worse.
+- **Throughput climbs steadily and latency stays flat**: you have not found the ceiling yet. Push harder.
+
+---
+
+## 5. Three experiments that find the wall
+
+Do not guess. Each of these takes a couple of minutes and eliminates a whole class of cause.
+
+### Experiment 1 — the unauthenticated baseline
+
+Hit the same route with **no token**. You get a `401` from the auth contributor, which means routing and the framework ran but none of your per-request work did:
+
+```
+authenticated:    352 rps    p50 89.6ms
+401 (no token):  3733 rps    p50  8.1ms
+```
+
+Ten times faster. So the framework is not the problem, and roughly 90% of the cost sits *after* authentication. If instead the 401 path were also slow, you would be looking at the HTTP layer, TLS, or logging.
+
+### Experiment 2 — change the pool size
+
+If you believe the database connection pool is the constraint, prove it. Raise it and re-run:
+
+```bash
+PORT=6020 DB_POOL_MAX=40 node dist/index.js
+```
+
+```
+pool 10:  351.5 rps
+pool 40:  351.6 rps
+```
+
+Identical. The pool was never the wall. This experiment is worth doing early precisely because "increase the pool" is such a tempting non-fix — and when it *is* the answer, you will see it immediately.
+
+### Experiment 3 — per-thread CPU
+
+This one is decisive on Linux. Node runs your JavaScript on a single thread, so if that thread is pinned at one core, no amount of concurrency will help. Sample `/proc/<pid>/task/*/stat` before and after a run:
+
+```bash
+PID=$(pgrep -f "node dist/index.js")
+snap() { for t in /proc/$PID/task/*; do
+  echo "$(basename $t) $(awk '{print $14+$15}' $t/stat) $(cat $t/comm)"; done; }
+
+snap > before
+PORT=6020 node load.mjs "/api/v1/projects?limit=20" 32 10 token.txt
+snap > after
+
+join before after -o 1.1,1.2,2.2,1.3 |
+  awk '{d=$3-$2; if (d>20) printf "%-8s %-14s %.2f core\n", $1, $4, d/1000}' | sort -k3 -rn
+```
+
+Fields 14 and 15 of `/proc/<pid>/stat` are user and system jiffies. At the usual 100Hz, **1000 jiffies over 10 seconds is one fully busy core**. Get that arithmetic wrong and you will misread the machine by a factor of ten — I did exactly that on the first pass, reported "10.8 cores" for a process that was using 1.08, and had to walk it back. Write the divisor down before you interpret anything.
+
+The result:
+
+```
+MainThread     0.98 core
+V8Worker       0.07 core
+V8Worker       0.07 core
+```
+
+The JavaScript thread is pinned. That is the wall: **one Node process ≈ one core of JS**, and everything else — pool size, more RAM, a bigger box — is irrelevant until the per-request CPU cost comes down or you run more processes.
+
+---
+
+## 6. The contributor pipeline is your hot path
+
+Here is the KickJS-specific part, and it is where the wins usually are.
+
+Context contributors (`defineHttpContextDecorator`) run on **every matching request**, before your handler. A typical authenticated API stacks up several: resolve the actor from the JWT, resolve the tenant, check the session is still live, check a module entitlement, check a permission. Each one is a few queries. None of them is your business logic, and collectively they can dwarf it.
+
+In the session above, listing 20 records cost **6 database round-trips and 456 rows read** — for a table holding 5 rows. The actual query was one of those six. The other five were pipeline.
+
+So audit the pipeline first. For each contributor ask:
+
+1. **Does it run on requests that do not need it?** Narrow the `dependsOn` or the route scope.
+2. **How many round-trips does it make?** Each one is a network hop plus a pool checkout.
+3. **How many rows does it read to produce its answer?** This is the question people skip, and it is where the worst offenders hide.
+
+You can answer 2 and 3 without a profiler. Sample `pg_stat_database` around a burst of requests:
+
+```js
+const stat = async () =>
+  new Map(
+    (await sql`select datname, xact_commit, tup_returned from pg_stat_database`)
+      .map((r) => [r.datname, r]),
+  );
+
+const before = await stat();
+for (let i = 0; i < 200; i++) await fetch(url, { headers });
+const after = await stat();
+// (xact_commit delta / 200) = transactions per request
+// (tup_returned delta / 200) = rows read per request
+```
+
+"Rows read per request" is the single most useful number in this whole exercise. It converts a vague "the query feels heavy" into "we read 456 rows to answer a yes/no question", which is a sentence that fixes itself.
+
+---
+
+## 7. Fix: don't build a set to answer a boolean
+
+The biggest win, and the most common shape of waste.
+
+A permission gate asks one question: *may this user perform this action?* A tempting implementation resolves the user's **entire** permission set and then tests membership:
+
+```ts
+// Five queries. The fourth reads every grant the user's groups hold.
+const set = await resolvePermissionSet(db, actor.sub, context);
+const allowed = set.has(action);
+```
+
+For an administrator whose groups carry most of the catalogue, that fourth query returns hundreds of rows — marshalled into JS objects, built into a `Set`, and then used for a single `has()`. On every request.
+
+Ask the database the question you actually have, as one round-trip of `EXISTS` probes:
+
+```ts
+export async function holdsAction(
+  db: Db,
+  userId: string,
+  context: Context,
+  action: string,
+): Promise<boolean> {
+  // Cheap gates first, in JS — no query needed to reject an unknown action.
+  const descriptor = catalogue.get(action);
+  if (!descriptor || descriptor.scope !== context.level) return false;
+
+  const rows = await db.execute(sql`
+    SELECT
+      EXISTS (
+        SELECT 1 FROM ${memberships}
+        WHERE ${memberships.user_id} = ${userId}
+          AND ${memberships.is_active} = true
+          AND ${memberships.deleted_at} IS NULL
+      ) AS has_membership,
+      EXISTS (
+        SELECT 1 FROM ${groupGrant}
+        JOIN ${groupMember} ON ${groupMember.group_id} = ${groupGrant.group_id}
+        WHERE ${groupGrant.action} = ${action}
+          AND ${groupMember.user_id} = ${userId}
+      ) AS via_group,
+      EXISTS (
+        SELECT 1 FROM ${userGrant}
+        WHERE ${userGrant.user_id} = ${userId}
+          AND ${userGrant.action} = ${action}
+      ) AS via_user
+  `);
+
+  // postgres-js returns rows with lowercased aliases for raw sql`…`.
+  const [row] = rows as unknown as Array<Record<string, boolean>>;
+  return !!row?.has_membership && (!!row.via_group || !!row.via_user);
+}
+```
+
+Five round-trips become one. 456 rows become 40. Postgres stops at the first matching row for each `EXISTS`, and an index on `(group_id, action)` serves the probe directly.
+
+Result on the ramp: **350 → 552 rps**, p50 at concurrency 8 down from 21.2ms to 13.5ms.
+
+Keep the set-building function — reporting endpoints and "what can this user do?" screens genuinely need the whole set. Just stop using it to answer a boolean.
+
+> **The general rule:** whenever code fetches a collection and immediately reduces it to one value — `.has()`, `.some()`, `.length > 0`, `.find()` — the database can almost certainly answer that directly, and will read far less to do it.
+
+---
+
+## 8. Fix: short-lived caches, with rules
+
+Once the per-request queries are minimal, the next question is whether they need to run at all. Routing metadata, entitlements and permissions change rarely and are read constantly.
+
+A per-process cache with a short TTL is usually all you need. No Redis, no new infrastructure:
+
+```ts
+interface Entry { readonly value: boolean; readonly expiresAt: number }
+
+const CACHE_TTL_MS = 15_000;
+const cache = new Map<string, Entry>();
+
+// Bounded, crudely. A cleared cache costs one re-query per live key; an LRU
+// here would be machinery for a case that should not arise.
+const MAX_ENTRIES = 50_000;
+
+const SEP = ' ';
+const keyFor = (orgId: string, userId: string, ctx: string, action: string) =>
+  `${orgId}${SEP}${userId}${SEP}${ctx}${SEP}${action}`;
+
+export function getCached(orgId: string, userId: string, ctx: string, action: string) {
+  const entry = cache.get(keyFor(orgId, userId, ctx, action));
+  if (!entry || entry.expiresAt <= Date.now()) return undefined;
+  return entry.value;
+}
+
+export function setCached(
+  orgId: string, userId: string, ctx: string, action: string, value: boolean,
+) {
+  if (cache.size >= MAX_ENTRIES) cache.clear();
+  cache.set(keyFor(orgId, userId, ctx, action), {
+    value,
+    expiresAt: Date.now() + CACHE_TTL_MS,
+  });
+}
+
+/** Drop everything. Over-invalidating is safe; under-invalidating is a bug. */
+export function invalidateAll(): void {
+  cache.clear();
+}
+```
+
+Five rules make this safe rather than a source of strange bugs.
+
+**Put the tenant in the key, first.** In a multi-tenant API a decision resolved against one tenant's data must never answer for another. User ids being UUIDs is not a tenancy boundary — it is a coincidence you are relying on. If a caller has no tenant id, do not cache it at all.
+
+**Cache only the reachable path.** For a routing lookup, cache the success and let every failure re-query. Then "tenant becomes reachable" (provision, enable, restore) is instant and needs no invalidation at all, while only "tenant becomes unreachable" can serve a stale answer — and that is the direction you can bound with a TTL and an explicit invalidation call.
+
+**Prefer a total drop to clever invalidation.** Scoped invalidation means threading a tenant id through every mutation path. Many of those use cases only hold an injected connection and never see one, so a scoped API buys you a handful of saved re-queries in exchange for a real chance of getting a security-relevant invalidation subtly wrong. These mutations are rare. Drop everything.
+
+**The TTL is the real bound, not the invalidation.** A per-process map cleared on one instance says nothing about the other four behind your load balancer. Explicit invalidation makes the instance that handled the change correct immediately; every other instance catches up when its entry expires. Write the TTL in the comment as the actual guarantee, and keep it short (15 seconds is a good default). If you need true cross-instance freshness, publish invalidations on a topic your stack already runs — then the TTL can go up.
+
+**Decide deliberately what is never cached.** Session revocation is the clearest example. If logging someone out must cut access immediately, that check stays a live read on every request, TTL or no TTL. Write down which guarantees survive the cache:
+
+| Event | Takes effect |
+| --- | --- |
+| Logout / session revoked | Immediately — never cached |
+| Account suspended | Next request on this instance; ≤ TTL elsewhere |
+| Permission granted or revoked | Next request on this instance; ≤ TTL elsewhere |
+| Tenant enabled or provisioned | Immediately — failures are never cached |
+| Tenant disabled | Next request on this instance; ≤ TTL elsewhere |
+
+Then wire `invalidateAll()` into every path that mutates the underlying tables — group membership, grants, role changes, account status, tenant lifecycle. Miss one and you get a stale-privilege bug that reproduces once a week and never in a test.
+
+Results: caching tenant routing took **552 → 673 rps**; caching permission decisions took **673 → 800 rps**.
+
+---
+
+## 9. Fix: memoise within a request
+
+Cheaper than a TTL cache, and completely safe: a `WeakMap` keyed by the frozen actor object, so several gates on one request share one lookup.
+
+```ts
+const byActor = new WeakMap<Actor, Map<string, Promise<boolean>>>();
+
+function cachedHoldsAction(db: Db, actor: Actor, ctx: Context, action: string) {
+  let byKey = byActor.get(actor);
+  if (!byKey) {
+    byKey = new Map();
+    byActor.set(actor, byKey);
+  }
+  const key = `${contextKey(ctx)}|${action}`;
+  const cached = byKey.get(key);
+  if (cached) return cached;
+
+  const promise = holdsAction(db, actor.sub, ctx, action);
+  byKey.set(key, promise);   // store the promise, not the result
+  return promise;
+}
+```
+
+Two things to get right. **Cache the promise, not the resolved value** — otherwise concurrent decorators on the same request each start their own query before the first finishes. And **a `WeakMap` keyed on the per-request actor** means the entry is collected with the request; there is nothing to expire and no way to leak.
+
+This has no staleness window at all, so reach for it before any TTL cache.
+
+---
+
+## 10. Scale out, not up
+
+Once the main thread is the wall, per-process throughput is capped by one core. The fix is more processes: `node:cluster`, several containers, or a process manager — plus a load balancer.
+
+Budget with the CPU-per-request figure you measured rather than a guess. From the numbers above, at 800 rps per process:
+
+| Target | Processes | Notes |
+| --- | --- | --- |
+| 100K req/min (1,667 rps) | ~3 | Plus database headroom |
+| 500K req/min (8,333 rps) | ~11 | Database becomes the next wall well before this |
+
+Two cautions. Each process gets **its own** connection pool, so `processes × pool_max` must stay under the server's `max_connections` — this is where a pool-per-process quietly exhausts Postgres. And each process gets its own in-memory caches, which is exactly why the TTL, not the invalidation call, is the guarantee you can rely on.
+
+---
+
+## 11. Measuring honestly
+
+Four ways to fool yourself, all of which I hit in one afternoon.
+
+**The load generator competes with the server.** Running five worker processes and five API processes on one 12-core box means the client is eating cores the server needs. My multi-process aggregate read 648 rps — a number that measured my laptop, not the API. Single-process figures were clean; the aggregate was worthless. Generate load from another machine, or accept that only the single-process numbers mean anything.
+
+**Shared database counters include other people's traffic.** `pg_stat_database` is per-database and global. If other services on your machine talk to the same database, per-request figures derived from it are approximate. Large before-and-after swings (456 → 40 rows) still carry signal; small ones do not.
+
+**Small datasets measure overhead, not scale.** A table with five rows tells you the fixed cost of a request. It says nothing about whether your query degrades at 500,000 rows — a missing index is invisible when a sequential scan reads three rows. Postgres will *choose* a sequential scan on a tiny table no matter how many indexes exist, so "seq_scan is high" on a small table is not evidence of a missing index. Check the query, not the counter. Both questions are real; answer them separately, with different datasets.
+
+**Verify behaviour, not just speed.** Every optimisation here changes when something is read. Run the authorisation and lifecycle test suites, not just the benchmark. In that session the caches surfaced a genuine test-isolation bug — one test cached a resolved tenant and the next expected it to fail — which is precisely the kind of cross-request leakage a cache introduces. Export a `resetCache()` for tests and call it in `beforeEach`.
+
+---
+
+## Recap
+
+- Build for production, load with a closed loop, report percentiles. Averages hide everything.
+- Flat throughput with linearly rising latency means a saturated resource. Find which one before changing code.
+- Three experiments: the **401 baseline** (framework vs. your work), **pool resize** (is it really the pool?), **per-thread CPU** (is the JS thread pinned?). Remember 1000 jiffies over 10s is one core.
+- In KickJS, audit the **contributor pipeline** first — it runs on every request and is usually larger than your handler.
+- Measure **rows read per request**. Fetching a collection to compute one boolean is the most common waste; `EXISTS` fixes it.
+- Collapse round-trips; memoise within a request with a `WeakMap`; cache across requests with a short TTL only where you can name what goes stale.
+- Cache rules: tenant first in the key, cache only the reachable path, drop everything on mutation, treat the TTL as the guarantee, and keep revocation live.
+- Past one core, add processes — and watch `processes × pool_max` against `max_connections`.
+
+The whole exercise was measure, be wrong, measure again. The two things I was most confident about — that the dev server was the problem, and that a missing index was the problem — were both wrong, and the measurements said so within minutes. That is the entire value of measuring first.
+
+---
+
+## Links
+
+- **KickJS on GitHub:** [github.com/forinda/kick-js](https://github.com/forinda/kick-js) — source, issues and discussions. A ⭐ helps others find it.
+- **Docs:** [kickjs.app](https://kickjs.app/)
+- **Postgres statistics views:** [pg_stat_database](https://www.postgresql.org/docs/current/monitoring-stats.html)
